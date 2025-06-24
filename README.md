@@ -1,10 +1,10 @@
-# cpu_pinning_provider
+# EPA orchestrator
 
 This snap provides CPU pinning information to other snaps (such as openstack-hypervisor) via a Unix socket interface.
 
 ## Purpose
 
-The `cpu_pinning_provider` snap exposes logic to determine isolated and shared CPU sets for pinning, which can be consumed by other snaps through a slot/plug interface.
+The `epa-orchestrator` snap exposes logic to determine isolated and shared CPU sets for pinning, which can be consumed by other snaps through a slot/plug interface.
 
 ## How it works
 
