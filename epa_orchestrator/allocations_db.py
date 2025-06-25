@@ -36,38 +36,6 @@ class AllocationsDB:
                 cpus.add(int(part))
         return cpus
 
-    def _to_ranges(self, cpu_list: List[int]) -> str:
-        """Convert CPU cores list to CPU range in string format.
-
-        Args:
-            cpu_list: List of CPU numbers
-
-        Returns:
-            Comma-separated string of CPU ranges
-        """
-        if not cpu_list:
-            return ""
-
-        ranges = []
-        start = cpu_list[0]
-        prev = start
-
-        for cpu in cpu_list[1:]:
-            if cpu != prev + 1:
-                if start == prev:
-                    ranges.append(str(start))
-                else:
-                    ranges.append(f"{start}-{prev}")
-                start = cpu
-            prev = cpu
-
-        if start == prev:
-            ranges.append(str(start))
-        else:
-            ranges.append(f"{start}-{prev}")
-
-        return ",".join(ranges)
-
     def get_available_cpus(self, total_cpus: str) -> List[int]:
         """Get list of available CPUs that haven't been allocated.
 
@@ -196,14 +164,14 @@ class AllocationsDB:
         total_available = len(self._parse_cpu_ranges(total_cpus))
         total_allocated = len(self._allocated_cpus)
         remaining_available = total_available - total_allocated
-        
+
         return {
             "total_available_cpus": total_available,
             "total_allocated_cpus": total_allocated,
             "remaining_available_cpus": remaining_available,
-            "total_allocations": len(self._allocations)
+            "total_allocations": len(self._allocations),
         }
 
 
 # Global instance of the allocations database
-allocations_db = AllocationsDB() 
+allocations_db = AllocationsDB()

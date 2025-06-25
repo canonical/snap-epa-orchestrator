@@ -1,10 +1,8 @@
 # SPDX-FileCopyrightText: 2024 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
-
 """Pydantic schemas for socket communication."""
-from typing import Literal, Optional
 from enum import Enum
-from typing import List
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, validator
 
@@ -13,6 +11,7 @@ API_VERSION = "1.0"
 
 class ActionType(str, Enum):
     """Enum for different action types."""
+
     ALLOCATE_CORES = "allocate_cores"
     LIST_ALLOCATIONS = "list_allocations"
 
@@ -23,13 +22,31 @@ class EpaRequest(BaseModel):
     version: Literal["1.0"] = Field(default=API_VERSION)
     snap_name: str = Field(description="Name of the requesting snap")
     action: ActionType = Field(description="Type of action to perform")
-    cores_requested: Optional[int] = Field(default=None, ge=0, description="Number of dedicated cores requested (only for allocate_cores)")
+    cores_requested: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Number of dedicated cores requested (only for allocate_cores)",
+    )
 
-    @validator('cores_requested')
-    def validate_cores_requested(cls, v, values):
-        action = values.get('action')
+    @validator("cores_requested")
+    def validate_cores_requested(self, v, values):
+        """Validate cores_requested field based on action type.
+
+        Args:
+            v: The value to validate
+            values: Dictionary containing other field values
+
+        Returns:
+            The validated value
+
+        Notes:
+            - For ALLOCATE_CORES action: if cores_requested is None, defaults to 0
+            - For LIST_ALLOCATIONS action: cores_requested should be None
+        """
+        action = values.get("action")
         if action == ActionType.ALLOCATE_CORES and v is None:
-            # For allocate_cores, if cores_requested is None, set it to 0 (which means 80% allocation)
+            # For allocate_cores, if cores_requested is None,
+            # set it to 0 (which means 80% allocation)
             return 0
         elif action == ActionType.LIST_ALLOCATIONS and v is not None:
             # For list_allocations, cores_requested should be None or ignored
@@ -47,7 +64,9 @@ class AllocateCoresResponse(BaseModel):
     allocated_cores: str = Field(description="Comma-separated list of allocated CPU ranges")
     shared_cpus: str = Field(description="Comma-separated list of shared CPU ranges")
     total_available_cpus: int = Field(description="Total number of CPUs available in the system")
-    remaining_available_cpus: int = Field(description="Number of CPUs still available for allocation")
+    remaining_available_cpus: int = Field(
+        description="Number of CPUs still available for allocation"
+    )
     error: str = ""
 
 
@@ -64,8 +83,12 @@ class ListAllocationsResponse(BaseModel):
 
     version: Literal["1.0"] = Field(default=API_VERSION)
     total_allocations: int = Field(description="Total number of snap allocations")
-    total_allocated_cpus: int = Field(description="Total number of CPUs allocated across all snaps")
+    total_allocated_cpus: int = Field(
+        description="Total number of CPUs allocated across all snaps"
+    )
     total_available_cpus: int = Field(description="Total number of CPUs available in the system")
-    remaining_available_cpus: int = Field(description="Number of CPUs still available for allocation")
+    remaining_available_cpus: int = Field(
+        description="Number of CPUs still available for allocation"
+    )
     allocations: List[SnapAllocation] = Field(description="List of all snap allocations")
     error: str = ""

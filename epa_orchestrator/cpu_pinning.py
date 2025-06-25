@@ -5,35 +5,11 @@
 
 import logging
 
+from .utils import to_ranges
+
 ISOLATED_CPUS_PATH = "/sys/devices/system/cpu/isolated"
 PRESENT_CPUS_PATH = "/sys/devices/system/cpu/present"
 MAX_ALLOCATION_PERCENTAGE = 80  # Maximum percentage of CPUs that can be allocated
-
-
-def _to_ranges(cpu_list):
-    """Convert CPU cores list to CPU range in string format."""
-    if not cpu_list:
-        return ""
-
-    ranges = []
-    start = cpu_list[0]
-    prev = start
-
-    for cpu in cpu_list[1:]:
-        if cpu != prev + 1:
-            if start == prev:
-                ranges.append(str(start))
-            else:
-                ranges.append(f"{start}-{prev}")
-            start = cpu
-        prev = cpu
-
-    if start == prev:
-        ranges.append(str(start))
-    else:
-        ranges.append(f"{start}-{prev}")
-
-    return ",".join(ranges)
 
 
 def get_isolated_cpus() -> str:
@@ -75,6 +51,22 @@ def calculate_cpu_pinning(cpu_list: str, cores_requested: int = 0) -> tuple[str,
     Returns:
         tuple: (cpu_shared_set, allocated_cores) where each is a comma-separated
               list of CPU ranges.
+
+    Examples:
+        >>> calculate_cpu_pinning("0-3", 2)
+        ('2-3', '0-1')
+        >>> calculate_cpu_pinning("0,2,4,6", 1)
+        ('2,4,6', '0')
+        >>> calculate_cpu_pinning("0-7", 0)  # Uses 80% default
+        ('6-7', '0-5')
+        >>> calculate_cpu_pinning("0-5", 4)
+        ('4-5', '0-3')
+        >>> calculate_cpu_pinning("0-9", 8)
+        ('8-9', '0-7')
+        >>> calculate_cpu_pinning("0-3", 5)  # More requested than available
+        ('', '')
+        >>> calculate_cpu_pinning("", 2)  # Empty CPU list
+        ('', '')
     """
     if not cpu_list:
         return "", ""
@@ -103,4 +95,4 @@ def calculate_cpu_pinning(cpu_list: str, cores_requested: int = 0) -> tuple[str,
     dedicated_cpus = cpus[:cores_requested]
     shared_cpus = cpus[cores_requested:]
 
-    return _to_ranges(shared_cpus), _to_ranges(dedicated_cpus)
+    return to_ranges(shared_cpus), to_ranges(dedicated_cpus)
