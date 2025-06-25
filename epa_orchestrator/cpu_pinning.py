@@ -7,7 +7,7 @@ import logging
 
 ISOLATED_CPUS_PATH = "/sys/devices/system/cpu/isolated"
 PRESENT_CPUS_PATH = "/sys/devices/system/cpu/present"
-CPU_SHARED_PERCENTAGE = 50  # Percentage of CPUs to be used for shared set
+MAX_ALLOCATION_PERCENTAGE = 80  # Maximum percentage of CPUs that can be allocated
 
 
 def _to_ranges(cpu_list):
@@ -70,10 +70,10 @@ def calculate_cpu_pinning(cpu_list: str, cores_requested: int = 0) -> tuple[str,
 
     Args:
         cpu_list: Comma-separated list of CPU ranges
-        cores_requested: Number of dedicated cores requested. If 0, uses a percentage.
+        cores_requested: Number of dedicated cores requested. If 0, allocates 80% of total CPUs.
 
     Returns:
-        tuple: (cpu_shared_set, vcpu_pin_set) where each is a comma-separated
+        tuple: (cpu_shared_set, allocated_cores) where each is a comma-separated
               list of CPU ranges.
     """
     if not cpu_list:
@@ -88,13 +88,19 @@ def calculate_cpu_pinning(cpu_list: str, cores_requested: int = 0) -> tuple[str,
             cpus.add(int(part))
 
     cpus = sorted(list(cpus))
+    total_cpus = len(cpus)
 
-    if cores_requested > 0:
-        split_point = min(cores_requested, len(cpus))
-    else:
-        split_point = int(len(cpus) * (100 - CPU_SHARED_PERCENTAGE) / 100)
+    if cores_requested == 0:
+        # Allocate 80% of total CPUs when 0 is requested
+        cores_requested = int(total_cpus * MAX_ALLOCATION_PERCENTAGE / 100)
+        logging.info(f"Allocating {cores_requested} cores (80% of {total_cpus} total CPUs)")
 
-    dedicated_cpus = cpus[:split_point]
-    shared_cpus = cpus[split_point:]
+    # Validate that we have enough CPUs available
+    if cores_requested > total_cpus:
+        logging.error(f"Requested {cores_requested} cores but only {total_cpus} available")
+        return "", ""
+
+    dedicated_cpus = cpus[:cores_requested]
+    shared_cpus = cpus[cores_requested:]
 
     return _to_ranges(shared_cpus), _to_ranges(dedicated_cpus)
