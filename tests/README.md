@@ -61,13 +61,13 @@ tox -e fmt
 Run specific test file:
 
 ```bash
-uv run --frozen --isolated --extra=dev pytest tests/unit/test_cpu_pinning.py -v
+pytest tests/unit/test_cpu_pinning.py -v
 ```
 
 Run tests with coverage:
 
 ```bash
-uv run --frozen --isolated --extra=dev pytest tests/unit/ --cov=epa_orchestrator --cov-report=html
+pytest tests/unit/ --cov=epa_orchestrator --cov-report=html
 ```
 
 ## Test Categories
