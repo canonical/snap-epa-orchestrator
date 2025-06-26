@@ -13,6 +13,9 @@ def to_ranges(cpu_list):
     Returns:
         str: Comma-separated string of CPU ranges
 
+    Raises:
+        TypeError: If cpu_list is None or not a list
+
     Examples:
         >>> to_ranges([0, 1, 2, 4, 5, 7])
         '0-2,4-5,7'
@@ -24,15 +27,26 @@ def to_ranges(cpu_list):
         '0'
         >>> to_ranges([0, 1, 2, 3])
         '0-3'
+        >>> to_ranges([1, 1, 2, 3, 3])
+        '1-3'
     """
+    if cpu_list is None:
+        raise TypeError("cpu_list cannot be None")
+
+    if not isinstance(cpu_list, list):
+        raise TypeError("cpu_list must be a list")
+
     if not cpu_list:
         return ""
 
+    # Remove duplicates and sort
+    unique_cpus = sorted(list(set(cpu_list)))
+
     ranges = []
-    start = cpu_list[0]
+    start = unique_cpus[0]
     prev = start
 
-    for cpu in cpu_list[1:]:
+    for cpu in unique_cpus[1:]:
         if cpu != prev + 1:
             if start == prev:
                 ranges.append(str(start))

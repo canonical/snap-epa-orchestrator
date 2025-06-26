@@ -4,8 +4,7 @@
 from enum import Enum
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
-from pydantic import field_validator
+from pydantic import BaseModel, Field, field_validator
 
 API_VERSION = "1.0"
 
@@ -50,8 +49,8 @@ class EpaRequest(BaseModel):
             # For allocate_cores, if cores_requested is None,
             # set it to 0 (which means 80% allocation)
             return 0
-        elif action == ActionType.LIST_ALLOCATIONS and v is not None:
-            # For list_allocations, cores_requested should be None or ignored
+        elif action == ActionType.LIST_ALLOCATIONS:
+            # For list_allocations, cores_requested should be None
             return None
         return v
 

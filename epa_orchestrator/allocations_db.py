@@ -26,11 +26,22 @@ class AllocationsDB:
 
         Returns:
             Set of CPU numbers
+
+        Raises:
+            ValueError: If CPU ranges are invalid (e.g., reverse ranges like "3-1")
         """
+        if not cpu_ranges.strip():
+            return set()
+
         cpus = set()
         for part in cpu_ranges.split(","):
+            part = part.strip()
+            if not part:
+                continue
             if "-" in part:
                 start, end = map(int, part.split("-"))
+                if start > end:
+                    raise ValueError(f"Invalid CPU range: {part} (start > end)")
                 cpus.update(range(start, end + 1))
             else:
                 cpus.add(int(part))
@@ -102,7 +113,11 @@ class AllocationsDB:
             List of SnapAllocation objects
         """
         return [
-            SnapAllocation(snap_name=snap_name, allocated_cores=cores)
+            SnapAllocation(
+                snap_name=snap_name,
+                allocated_cores=cores,
+                cores_count=len(self._parse_cpu_ranges(cores)),
+            )
             for snap_name, cores in self._allocations.items()
         ]
 

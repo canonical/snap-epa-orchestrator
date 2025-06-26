@@ -67,9 +67,16 @@ def calculate_cpu_pinning(cpu_list: str, cores_requested: int = 0) -> "tuple[str
         ('', '')
         >>> calculate_cpu_pinning("", 2)  # Empty CPU list
         ('', '')
+        >>> calculate_cpu_pinning("0-3", -1)  # Negative requested
+        ('0-3', '')
     """
     if not cpu_list:
         return "", ""
+
+    # Handle negative cores_requested
+    if cores_requested < 0:
+        logging.warning(f"Negative cores_requested ({cores_requested}), treating as 0")
+        cores_requested = 0
 
     cpus = set()
     for part in cpu_list.split(","):
