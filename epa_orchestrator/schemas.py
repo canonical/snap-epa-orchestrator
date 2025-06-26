@@ -4,7 +4,8 @@
 from enum import Enum
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
+from pydantic import field_validator
 
 API_VERSION = "1.0"
 
@@ -28,8 +29,9 @@ class EpaRequest(BaseModel):
         description="Number of dedicated cores requested (only for allocate_cores)",
     )
 
-    @validator("cores_requested")
-    def validate_cores_requested(self, v, values):
+    @field_validator("cores_requested")
+    @classmethod
+    def validate_cores_requested(cls, v, values):
         """Validate cores_requested field based on action type.
 
         Args:
@@ -43,7 +45,7 @@ class EpaRequest(BaseModel):
             - For ALLOCATE_CORES action: if cores_requested is None, defaults to 0
             - For LIST_ALLOCATIONS action: cores_requested should be None
         """
-        action = values.get("action")
+        action = values.data.get("action")
         if action == ActionType.ALLOCATE_CORES and v is None:
             # For allocate_cores, if cores_requested is None,
             # set it to 0 (which means 80% allocation)

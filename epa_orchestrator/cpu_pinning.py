@@ -41,7 +41,7 @@ def get_isolated_cpus() -> str:
         return ""
 
 
-def calculate_cpu_pinning(cpu_list: str, cores_requested: int = 0) -> tuple[str, str]:
+def calculate_cpu_pinning(cpu_list: str, cores_requested: int = 0) -> "tuple[str, str]":
     """Calculate CPU pinning configuration from isolated CPU list.
 
     Args:

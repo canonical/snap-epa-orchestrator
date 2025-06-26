@@ -188,10 +188,10 @@ def main():
 
                     if request.action == ActionType.ALLOCATE_CORES:
                         response = handle_allocate_cores(request)
-                        conn.sendall(response.json().encode())
+                        conn.sendall(response.model_dump_json().encode())
                     elif request.action == ActionType.LIST_ALLOCATIONS:
                         response = handle_list_allocations()
-                        conn.sendall(response.json().encode())
+                        conn.sendall(response.model_dump_json().encode())
                     else:
                         error_response = AllocateCoresResponse(
                             snap_name=request.snap_name,
@@ -203,7 +203,7 @@ def main():
                             remaining_available_cpus=0,
                             error=f"Unknown action: {request.action}"
                         )
-                        conn.sendall(error_response.json().encode())
+                        conn.sendall(error_response.model_dump_json().encode())
 
                 except (ValidationError, json.JSONDecodeError) as e:
                     error_response = AllocateCoresResponse(
@@ -216,7 +216,7 @@ def main():
                         remaining_available_cpus=0,
                         error=str(e)
                     )
-                    conn.sendall(error_response.json().encode())
+                    conn.sendall(error_response.model_dump_json().encode())
 
 
 if __name__ == "__main__":
