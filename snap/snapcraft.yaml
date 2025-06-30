@@ -1,6 +1,6 @@
 name: epa-orchestrator
 base: core22
-version: '0.1'
+version: '2025.1'
 summary: EPA orchestrator for OpenStack Hypervisor
 
 description: |

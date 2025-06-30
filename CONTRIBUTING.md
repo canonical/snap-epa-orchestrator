@@ -2,11 +2,11 @@
 
 ## Overview
 
-This documents explains the processes and practices recommended for contributing enhancements to
-this snap.
+This document explains the processes and practices recommended for contributing enhancements to
+the EPA Orchestrator snap.
 
 - Generally, before developing enhancements to this snap, you should consider [opening an issue
-  ](https://github.com/openstack-snaps/snap-microstack-hypervisor/issues) explaining your use case.
+  ](https://github.com/canonical/snap-epa-orchestrator/issues) explaining your use case.
 - If you would like to chat with us about your use-cases or proposed implementation, you can reach
   us at [Canonical Mattermost public channel](https://chat.charmhub.io/charmhub/channels/charm-dev)
   or [Discourse](https://discourse.charmhub.io/).
@@ -29,11 +29,42 @@ source .tox/unit/bin/activate
 
 ### Testing
 
+The project includes a comprehensive test suite with both unit and integration tests:
+
 ```shell
 tox -e fmt           # update your code according to linting rules
 tox -e lint          # code style
-tox -e unit          # unit tests
+tox -e unit          # unit tests (17 tests)
+tox -e integration   # integration tests (1 test)
 tox                  # runs 'lint' and 'unit' environments
+```
+
+#### Test Structure
+
+- **Unit Tests** (`tests/unit/`): 16 tests covering core functionality
+  - `test_allocations_db.py`: Database operations and CPU allocation tracking
+  - `test_cpu_pinning.py`: CPU pinning logic and isolated CPU detection
+  - `test_schemas.py`: Request/response schema validation
+  - `test_utils.py`: Utility functions
+  - `test_daemon_integration.py`: Daemon request processing logic
+
+- **Integration Tests** (`tests/integration/`): 1 test covering end-to-end functionality
+  - `test_socket_communication.py`: Real socket communication with daemon functionality
+
+#### Running Tests Directly
+
+```shell
+# Run all tests
+pytest tests/ -v
+
+# Run only unit tests
+pytest tests/unit/ -v
+
+# Run only integration tests
+pytest tests/integration/ -v
+
+# Run with coverage
+pytest tests/ --cov=epa_orchestrator --cov-report=html
 ```
 
 ## Build Snap
@@ -48,15 +79,14 @@ snapcraft --use-lxd
 
 ```bash
 # Install the development snap
-sudo snap install --devmode
-# Configure 
-sudo snap set mysqld-exporter mysql.host=localhost mysql.user=testuser mysql.password=secret123
-# Restart the service for the changes to take effect
-sudo snap restart microstack-hypervisor
+sudo snap install --devmode epa-orchestrator_*.snap
+
+# The daemon will start automatically and listen on the Unix socket
+# Socket path: $SNAP_DATA/data/epa.sock
 ```
 
 ## Canonical Contributor Agreement
 
-Canonical welcomes contributions to the MicroStack Hypervisor snap. Please check
+Canonical welcomes contributions to the EPA Orchestrator snap. Please check
 out our [contributor agreement](https://ubuntu.com/legal/contributors) if you're
 interested in contributing to the solution.
