@@ -1,40 +1,46 @@
-# EPA Orchestrator
+# EPA Orchestrator Snap
 
-The **EPA Orchestrator** snap provides a unified, extensible interface for exposing Enhanced Platform Awareness (EPA) features to other snaps and workloads (such as openstack-hypervisor) via a secure Unix socket API.
+This repository contains the source for the EPA Orchestrator snap.
 
-## Vision
-
-The EPA Orchestrator is designed to be the central authority for platform feature discovery, allocation, and management on a host. Its goal is to enable advanced workload placement and resource management by making EPA features available to consumers in a consistent, reliable, and secure manner.
+**EPA Orchestrator** is designed to provide secure, policy-driven resource orchestration for snaps and workloads on Linux systems. Its vision is to enable fine-grained, dynamic allocation and management of system resources—starting with CPU pinning, but with plans to expand to other resource types and orchestration policies. The orchestrator exposes a secure Unix socket API for resource allocation and introspection, making it easy for other snaps (such as openstack-hypervisor) and workloads to request and manage dedicated or shared resources in a controlled manner.
 
 ## Features
 
-- **CPU Pinning:** Exposes isolated and shared CPU sets, tracks per-snap allocations, and enforces allocation policies.
+- **CPU Pinning and Allocation**: Dynamically allocate isolated and shared CPU sets to snaps and workloads, supporting both dedicated and shared CPU usage models.
+- **Resource Introspection**: Query current allocations and available resources via a secure API.
+- **Snap Integration**: Designed for seamless integration with other snaps (e.g., openstack-hypervisor) using the slot/plug mechanism.
+- **Secure Unix Socket API**: All orchestration actions are performed via a secure, local Unix socket with JSON-based requests and responses.
+- **Policy-Driven Design**: Built to support future policy enforcement for resource allocation and isolation.
 
-## Purpose
+### Planned Features
 
-The `epa-orchestrator` snap exposes logic to determine isolated and shared CPU sets for pinning, which can be consumed by other snaps through a slot/plug interface. It also tracks CPU allocations per snap in an in-memory database.
+- **Memory Pinning and Allocation**: Enable allocation and isolation of memory resources for snaps and workloads.
 
-## How it works
+## Getting Started
 
-- The snap runs a daemon that listens on a Unix domain socket.
-- When a client connects and sends a request (Schema present in schemas.py), the daemon responds with the shared and dedicated CPU set.
-- The logic for determining CPU pinning is in `cpu_pinning.py`.
-- CPU allocations are tracked per snap name in an in-memory database.
+To get started with the EPA Orchestrator, install the snap using snapd:
 
-## CPU Allocation Logic
+```bash
+sudo snap install epa-orchestrator --dangerous --devmode
+```
 
-The EPA orchestrator implements the following CPU allocation rules:
+The snap runs a daemon that listens on a Unix domain socket and provides a JSON API for CPU allocation and introspection.
 
-1. **When `cores_requested = 0`**: Allocates 80% of the total available CPUs (e.g., if 20 CPUs are available, 16 will be allocated)
-2. **When `cores_requested > 0`**: Allocates exactly the requested number of cores
-3. **Error handling**: If insufficient CPUs are available, returns an error message
-4. **Tracking**: All allocations are tracked to prevent overallocation
+## Configuration Reference
 
-## Request Schema
+The EPA Orchestrator snap does not require complex configuration for basic operation. However, it can be integrated with other snaps (e.g., openstack-hypervisor) via the slot/plug mechanism for EPA information sharing.
 
-The EPA orchestrator supports two actions:
+### API Usage
 
-### 1. Allocate Cores (`allocate_cores`)
+The daemon listens on:
+
+```
+$SNAP_DATA/data/epa.sock
+```
+
+Clients can connect to this socket and send JSON requests. The supported actions are:
+
+#### 1. Allocate Cores (`allocate_cores`)
 
 Request CPU allocation for a specific snap:
 
@@ -47,20 +53,21 @@ Request CPU allocation for a specific snap:
 }
 ```
 
-**Field Usage:**
+- `cores_requested`: Number of cores to allocate (0 = 80% of total CPUs)
 
-- `cores_requested`: **Required** for `allocate_cores` action
-  - `0`: Allocates 80% of total CPUs
-  - `> 0`: Allocates exactly the requested number of cores
-  - If omitted, defaults to `0` (80% allocation)
+#### 2. List Allocations (`list_allocations`)
 
-**Examples:**
+Get all current snap allocations:
 
-- `cores_requested: 0` → Allocates 80% of total CPUs
-- `cores_requested: 2` → Allocates exactly 2 CPUs
-- `cores_requested: 25` → Returns error if only 20 CPUs available
+```json
+{
+  "version": "1.0",
+  "snap_name": "any-snap",
+  "action": "list_allocations"
+}
+```
 
-**Success Response:**
+### Response Example
 
 ```json
 {
@@ -76,169 +83,40 @@ Request CPU allocation for a specific snap:
 }
 ```
 
-**Error Response (insufficient CPUs):**
+## Build
 
-```json
-{
-  "version": "1.0",
-  "snap_name": "my-snap",
-  "cores_requested": 25,
-  "cores_allocated": 0,
-  "allocated_cores": "",
-  "shared_cpus": "",
-  "total_available_cpus": 20,
-  "remaining_available_cpus": 4,
-  "error": "Insufficient CPUs available. Requested: 25, Available: 4"
-}
-```
-
-### 2. List Allocations (`list_allocations`)
-
-Get all current snap allocations:
-
-```json
-{
-  "version": "1.0",
-  "snap_name": "any-snap",
-  "action": "list_allocations"
-}
-```
-
-**Note:** The `cores_requested` field is optional for `list_allocations` and will be ignored if provided.
-
-**Response:**
-
-```json
-{
-  "version": "1.0",
-  "total_allocations": 2,
-  "total_allocated_cpus": 18,
-  "total_available_cpus": 20,
-  "remaining_available_cpus": 2,
-  "allocations": [
-    {
-      "snap_name": "my-snap",
-      "allocated_cores": "0-15",
-      "cores_count": 16
-    },
-    {
-      "snap_name": "another-snap",
-      "allocated_cores": "16-17",
-      "cores_count": 2
-    }
-  ],
-  "error": ""
-}
-```
-
-## Response Field Descriptions
-
-### Allocate Cores Response
-
-- `snap_name`: Name of the snap that was allocated cores
-- `cores_requested`: Number of cores that were requested
-- `cores_allocated`: Number of cores that were actually allocated
-- `allocated_cores`: Comma-separated list of allocated CPU ranges
-- `shared_cpus`: Comma-separated list of shared CPU ranges
-- `total_available_cpus`: Total number of CPUs available in the system
-- `remaining_available_cpus`: Number of CPUs still available for allocation
-
-### List Allocations Response
-
-- `total_allocations`: Total number of snap allocations
-- `total_allocated_cpus`: Total number of CPUs allocated across all snaps
-- `total_available_cpus`: Total number of CPUs available in the system
-- `remaining_available_cpus`: Number of CPUs still available for allocation
-- `allocations`: List of all snap allocations with details
-
-## Integration
-
-- The consuming snap (e.g., openstack-hypervisor) should connect to the socket and request CPU pinning info as needed.
-- The two snaps should be connected via the slot/plug mechanism in their respective snapcraft.yaml files.
-- Each snap should provide its name when requesting CPU allocations.
-
-## Development
-
-### Prerequisites
-
-- Python 3.10 or higher
-- Virtual environment (recommended)
-- Tox for testing
-
-### Setup
+To build and test the snap, see CONTRIBUTING.md for full details. Typical steps:
 
 ```bash
-# Clone the repository
-git clone https://github.com/canonical/snap-epa-orchestrator.git
-cd snap-epa-orchestrator
+# Build the snap
+snapcraft --use-lxd
 
-# Create and activate virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Install dependencies
-pip install -e .
-pip install tox
+# Install the snap
+sudo snap install --dangerous epa-orchestrator_*.snap
 ```
 
-### Testing
+## Testing
 
-The project includes a comprehensive test suite with unit, integration, and functional tests:
+The project includes unit, integration, and functional tests. To run all tests:
 
 ```bash
-# Run all tests and checks
 tox
-
-# Run specific test environments
-tox -e unit          # Run Unit tests
-tox -e integration   # Run Integration tests
-tox -e functional    # Functional tests - deploys and tests the snap
-tox -e lint          # Code style checks
-tox -e fmt           # Code formatting
-tox -e snap          # Build the snap package
 ```
 
-**Functional Testing:**
-The `tox -e functional` environment performs comprehensive real-world testing:
+Or run specific test environments:
 
-- Builds the snap package
-- Installs the snap in devmode
-- Tests snap daemon startup and service status
-- Verifies Unix socket creation and permissions
-- Tests all API endpoints with real requests
-- Validates CPU allocation logic in a deployed environment
-- Tests error handling and edge cases
-- Verifies concurrent request handling
-- Tests snap restart functionality
-- Automatically cleans up after testing
+```bash
+tox -e unit
+tox -e integration
+tox -e lint
+tox -e fmt
+```
 
 **Note:** Functional tests require sudo privileges for snap installation and management.
 
-## Build and Deploy
-
-### Build Snap
-
-```bash
-# Build the snap using tox (recommended)
-tox -e snap
-
-# Alternative: Build directly with snapcraft
-snapcraft --use-lxd
-```
-
-### Install and Deploy
-
-```bash
-# Install the development snap
-sudo snap install --devmode epa-orchestrator_*.snap
-
-# The daemon will start automatically and listen on the Unix socket
-# Socket path: $SNAP_DATA/data/epa.sock
-```
-
 ## Contributing
 
-Please see [CONTRIBUTING.md](CONTRIBUTING.md) for detailed information on how to contribute to this project.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to contribute to this project.
 
 ## License
 

@@ -3,7 +3,6 @@
 
 """Concise integration test for socket communication with the daemon functionality."""
 
-import json
 import os
 import socket
 import threading
@@ -12,8 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from epa_orchestrator.allocations_db import allocations_db
-from epa_orchestrator.cpu_pinning import calculate_cpu_pinning, get_isolated_cpus
+from epa_orchestrator.daemon_handler import handle_daemon_request
 from epa_orchestrator.schemas import ActionType, AllocateCoresResponse, EpaRequest
 
 
@@ -43,80 +41,8 @@ class TestSocketCommunication:
             with conn:
                 data = conn.recv(1024)
                 if data:
-                    try:
-                        request_data = json.loads(data.decode())
-                        request = EpaRequest(**request_data)
-
-                        if request.action == ActionType.ALLOCATE_CORES:
-                            # Process allocation request
-                            isolated = get_isolated_cpus()
-                            if not isolated:
-                                response = AllocateCoresResponse(
-                                    snap_name=request.snap_name,
-                                    cores_requested=request.cores_requested or 0,
-                                    cores_allocated=0,
-                                    allocated_cores="",
-                                    shared_cpus="",
-                                    total_available_cpus=0,
-                                    remaining_available_cpus=0,
-                                    error="No CPUs available",
-                                )
-                            else:
-                                shared, dedicated = calculate_cpu_pinning(
-                                    isolated, request.cores_requested or 0
-                                )
-                                if dedicated:
-                                    allocations_db.allocate_cores(request.snap_name, dedicated)
-                                    stats = allocations_db.get_system_stats(isolated)
-                                    response = AllocateCoresResponse(
-                                        snap_name=request.snap_name,
-                                        cores_requested=request.cores_requested or 0,
-                                        cores_allocated=len(
-                                            allocations_db._parse_cpu_ranges(dedicated)
-                                        ),
-                                        allocated_cores=dedicated,
-                                        shared_cpus=shared,
-                                        total_available_cpus=stats["total_available_cpus"],
-                                        remaining_available_cpus=stats["remaining_available_cpus"],
-                                    )
-                                else:
-                                    response = AllocateCoresResponse(
-                                        snap_name=request.snap_name,
-                                        cores_requested=request.cores_requested or 0,
-                                        cores_allocated=0,
-                                        allocated_cores="",
-                                        shared_cpus="",
-                                        total_available_cpus=0,
-                                        remaining_available_cpus=0,
-                                        error="Failed to allocate cores",
-                                    )
-
-                            conn.sendall(response.model_dump_json().encode())
-                        else:
-                            # Unknown action
-                            response = AllocateCoresResponse(
-                                snap_name=request.snap_name,
-                                cores_requested=request.cores_requested or 0,
-                                cores_allocated=0,
-                                allocated_cores="",
-                                shared_cpus="",
-                                total_available_cpus=0,
-                                remaining_available_cpus=0,
-                                error=f"Unknown action: {request.action}",
-                            )
-                            conn.sendall(response.model_dump_json().encode())
-                    except Exception as e:
-                        error_response = AllocateCoresResponse(
-                            snap_name="",
-                            cores_requested=0,
-                            cores_allocated=0,
-                            allocated_cores="",
-                            shared_cpus="",
-                            total_available_cpus=0,
-                            remaining_available_cpus=0,
-                            error=str(e),
-                        )
-                        conn.sendall(error_response.model_dump_json().encode())
+                    response_bytes = handle_daemon_request(data)
+                    conn.sendall(response_bytes)
 
         # Start server thread
         server_thread = threading.Thread(target=server_handler, daemon=True)

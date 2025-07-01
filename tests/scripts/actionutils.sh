@@ -21,15 +21,7 @@ function free_runner_disk() {
     sudo docker rmi $(docker images -q) || true
 }
 
-function install_hurl() {
-    VERSION=5.0.1
-    downloadurl="https://github.com/Orange-OpenSource/hurl/releases/download/$VERSION/hurl_${VERSION}_amd64.deb"
-    curl --location --remote-name $downloadurl
-    sudo dpkg -i ./hurl_${VERSION}_amd64.deb
-}
-
 function install_snap() {
-    # Look for snap file in current directory first, then home directory
     SNAP_FILE=$(ls ${SNAP_NAME}_*.snap 2>/dev/null | head -n1 || echo "")
     if [ -z "$SNAP_FILE" ]; then
         SNAP_FILE=$(ls ~/${SNAP_NAME}_*.snap 2>/dev/null | head -n1 || echo "")
@@ -62,7 +54,7 @@ function test_socket_api() {
     
     SOCKET_PATH="/var/snap/${SNAP_NAME}/current/data/epa.sock"
     
-    # Wait for socket to be available (robust polling)
+    # Wait for socket to be available
     timeout=30
     for i in $(seq 1 $timeout); do
         if [ -S "$SOCKET_PATH" ]; then
@@ -76,77 +68,15 @@ function test_socket_api() {
         return 1
     fi
     
-    # Test basic allocation
+    # Test core allocation
     echo "Testing basic core allocation..."
-    python3 -c "
-import socket
-import json
-
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.connect('$SOCKET_PATH')
-
-request = {
-    'version': '1.0',
-    'snap_name': 'test-snap',
-    'action': 'allocate_cores',
-    'cores_requested': 2
-}
-
-sock.sendall(json.dumps(request).encode())
-response = sock.recv(4096).decode()
-result = json.loads(response)
-
-print('Response:', result)
-assert result['version'] == '1.0'
-assert result['snap_name'] == 'test-snap'
-assert result['cores_requested'] == 2
-assert result['error'] == ''
-assert result['allocated_cores'] != ''
-assert result['total_available_cpus'] > 0
-# shared_cpus can be empty if all CPUs are allocated
-assert 'shared_cpus' in result
-
-sock.close()
-print('Basic allocation test passed!')
-"
+    SOCKET_PATH=$SOCKET_PATH python3 scripts/allocate_cores.py --snap test-snap --cores 2
     
     # Test list allocations
     echo "Testing list allocations..."
-    python3 -c "
-import socket
-import json
-
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.connect('$SOCKET_PATH')
-
-request = {
-    'version': '1.0',
-    'snap_name': 'any-snap',
-    'action': 'list_allocations'
-}
-
-sock.sendall(json.dumps(request).encode())
-response = sock.recv(4096).decode()
-result = json.loads(response)
-
-print('Response:', result)
-assert result['total_allocations'] >= 0
-assert result['total_allocated_cpus'] >= 0
-assert result['total_available_cpus'] > 0
-assert result['remaining_available_cpus'] >= 0
-assert 'allocations' in result
-assert result['error'] == ''
-
-sock.close()
-print('List allocations test passed!')
-"
+    SOCKET_PATH=$SOCKET_PATH python3 scripts/list_allocations.py
     
     echo "All socket API tests passed!"
-}
-
-function hurl() {
-    # For now, use the Python-based socket test instead of hurl
-    test_socket_api
 }
 
 function print_logs() {
@@ -189,7 +119,6 @@ function wait_for_snapd() {
             return 1
         fi
     done
-    # Wait for snapd to finish seeding
     elapsed=0
     while ! sudo lxc exec "$container" -- snap version >/dev/null 2>&1; do
         sleep 1
@@ -220,14 +149,12 @@ function setup_lxd_cluster() {
     BASENAME=$(basename "$SNAP_FILE")
 
     cleanup_lxd_nodes
-    # LXD is already initialized by the workflow
     sudo lxc launch ubuntu:22.04 node1 || true
     sudo lxc launch ubuntu:22.04 node2 || true
 
     wait_for_container_running node1 || return 1
     wait_for_container_running node2 || return 1
 
-    # Wait for snapd to be ready in both containers
     wait_for_snapd node1 || return 1
     wait_for_snapd node2 || return 1
 
@@ -236,8 +163,8 @@ function setup_lxd_cluster() {
         sudo lxc file push "$SNAP_FILE" $node/root/
         sudo lxc exec $node -- snap install --dangerous /root/"$BASENAME"
         sudo lxc exec $node -- snap connect $SNAP_NAME:network-bind
-        # Push the test script into the container (MicroCeph pattern)
         sudo lxc file push ~/actionutils.sh $node/root/actionutils.sh --mode=755
+        sudo lxc file push -r ~/scripts $node/root/
         echo "$node setup complete"
     done
 }

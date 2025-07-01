@@ -61,3 +61,25 @@ def to_ranges(cpu_list):
         ranges.append(f"{start}-{prev}")
 
     return ",".join(ranges)
+
+
+def _count_cpus_in_ranges(cpu_ranges: str) -> int:
+    """Count the number of CPUs in a comma-separated range string.
+
+    Args:
+        cpu_ranges: Comma-separated list of CPU ranges (e.g., "0-2,4,6-8")
+
+    Returns:
+        Number of CPUs in the ranges
+    """
+    if not cpu_ranges:
+        return 0
+
+    count = 0
+    for part in cpu_ranges.split(","):
+        if "-" in part:
+            start, end = map(int, part.split("-"))
+            count += end - start + 1
+        else:
+            count += 1
+    return count

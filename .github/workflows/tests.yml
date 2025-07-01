@@ -1,4 +1,4 @@
-name: Functional Tests
+name: CI
 
 on:
   push:
@@ -7,6 +7,45 @@ on:
     branches: [main]
 
 jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install tox
+        run: python -m pip install tox
+      - name: Run lint
+        run: tox -e lint
+
+  fmt:
+    name: Format
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install tox
+        run: python -m pip install tox
+      - name: Run format
+        run: tox -e fmt
+
+  unit:
+    name: Unit Tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install tox
+        run: python -m pip install tox
+      - name: Run unit tests
+        run: tox -e unit
+
   build-snap:
     name: Build EPA Orchestrator Snap
     runs-on: ubuntu-22.04
@@ -71,6 +110,8 @@ jobs:
           fetch-depth: 0
       - name: Copy utils
         run: cp tests/scripts/actionutils.sh $HOME
+      - name: Copy scripts directory
+        run: cp -r scripts $HOME
       - name: Clear FORWARD firewall rules
         run: ~/actionutils.sh cleaript
       - name: Free disk
