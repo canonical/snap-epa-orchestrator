@@ -1,0 +1,100 @@
+name: Functional Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-snap:
+    name: Build EPA Orchestrator Snap
+    runs-on: ubuntu-22.04
+    outputs:
+      snap-file: ${{ steps.snapcraft.outputs.snap }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build snap
+        id: snapcraft
+        uses: snapcore/action-build@v1
+      - name: Upload snap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: snaps
+          path: ${{ steps.snapcraft.outputs.snap }}
+          retention-days: 1
+
+  functional-tests:
+    name: Functional Tests
+    runs-on: ubuntu-22.04
+    needs: build-snap
+    steps:
+      - name: Download snap
+        uses: actions/download-artifact@v4
+        with:
+          name: snaps
+          path: /home/runner
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Copy utils
+        run: cp tests/scripts/actionutils.sh $HOME
+      - name: Clear FORWARD firewall rules
+        run: ~/actionutils.sh cleaript
+      - name: Free disk
+        run: ~/actionutils.sh free_runner_disk
+      - name: Install snap
+        run: ~/actionutils.sh install_snap
+      - name: Test socket API
+        run: ~/actionutils.sh test_socket_api
+      - name: Print logs for failure
+        if: failure()
+        run: ~/actionutils.sh print_logs
+
+  multi-node-tests:
+    name: Multi-Node LXD Tests
+    runs-on: ubuntu-22.04
+    needs: build-snap
+    steps:
+      - name: Download snap
+        uses: actions/download-artifact@v4
+        with:
+          name: snaps
+          path: /home/runner
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Copy utils
+        run: cp tests/scripts/actionutils.sh $HOME
+      - name: Clear FORWARD firewall rules
+        run: ~/actionutils.sh cleaript
+      - name: Free disk
+        run: ~/actionutils.sh free_runner_disk
+      - name: Setup LXD permissions and cluster
+        run: |
+          sudo usermod -a -G lxd $USER
+          sudo usermod -a -G adm $USER
+          # Initialize LXD and run setup in the same shell context
+          sg lxd -c "
+            sudo lxd init --auto
+            ~/actionutils.sh setup_lxd_cluster
+          "
+      - name: Test multi-node deployment
+        run: |
+          echo "Testing multi-node deployment..."
+          for node in node1 node2; do
+            echo "Testing $node..."
+            sudo lxc exec $node -- bash /root/actionutils.sh test_socket_api
+          done
+      - name: Print logs for failure
+        if: failure()
+        run: |
+          echo "==== Node1 Logs ===="
+          sudo lxc exec node1 -- bash /root/actionutils.sh print_logs || true
+          echo "==== Node2 Logs ===="
+          sudo lxc exec node2 -- bash /root/actionutils.sh print_logs || true

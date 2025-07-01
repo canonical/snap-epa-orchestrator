@@ -1,6 +1,14 @@
 # EPA Orchestrator
 
-This snap provides CPU pinning information to other snaps (such as openstack-hypervisor) via a Unix socket interface.
+The **EPA Orchestrator** snap provides a unified, extensible interface for exposing Enhanced Platform Awareness (EPA) features to other snaps and workloads (such as openstack-hypervisor) via a secure Unix socket API.
+
+## Vision
+
+The EPA Orchestrator is designed to be the central authority for platform feature discovery, allocation, and management on a host. Its goal is to enable advanced workload placement and resource management by making EPA features available to consumers in a consistent, reliable, and secure manner.
+
+## Features
+
+- **CPU Pinning:** Exposes isolated and shared CPU sets, tracks per-snap allocations, and enforces allocation policies.
 
 ## Purpose
 
@@ -27,98 +35,106 @@ The EPA orchestrator implements the following CPU allocation rules:
 The EPA orchestrator supports two actions:
 
 ### 1. Allocate Cores (`allocate_cores`)
+
 Request CPU allocation for a specific snap:
 
 ```json
 {
-    "version": "1.0",
-    "snap_name": "my-snap",
-    "action": "allocate_cores",
-    "cores_requested": 2
+  "version": "1.0",
+  "snap_name": "my-snap",
+  "action": "allocate_cores",
+  "cores_requested": 2
 }
 ```
 
 **Field Usage:**
+
 - `cores_requested`: **Required** for `allocate_cores` action
   - `0`: Allocates 80% of total CPUs
   - `> 0`: Allocates exactly the requested number of cores
   - If omitted, defaults to `0` (80% allocation)
 
 **Examples:**
+
 - `cores_requested: 0` → Allocates 80% of total CPUs
 - `cores_requested: 2` → Allocates exactly 2 CPUs
 - `cores_requested: 25` → Returns error if only 20 CPUs available
 
 **Success Response:**
+
 ```json
 {
-    "version": "1.0",
-    "snap_name": "my-snap",
-    "cores_requested": 2,
-    "cores_allocated": 2,
-    "allocated_cores": "0-1",
-    "shared_cpus": "2-19",
-    "total_available_cpus": 20,
-    "remaining_available_cpus": 18,
-    "error": ""
+  "version": "1.0",
+  "snap_name": "my-snap",
+  "cores_requested": 2,
+  "cores_allocated": 2,
+  "allocated_cores": "0-1",
+  "shared_cpus": "2-19",
+  "total_available_cpus": 20,
+  "remaining_available_cpus": 18,
+  "error": ""
 }
 ```
 
 **Error Response (insufficient CPUs):**
+
 ```json
 {
-    "version": "1.0",
-    "snap_name": "my-snap",
-    "cores_requested": 25,
-    "cores_allocated": 0,
-    "allocated_cores": "",
-    "shared_cpus": "",
-    "total_available_cpus": 20,
-    "remaining_available_cpus": 4,
-    "error": "Insufficient CPUs available. Requested: 25, Available: 4"
+  "version": "1.0",
+  "snap_name": "my-snap",
+  "cores_requested": 25,
+  "cores_allocated": 0,
+  "allocated_cores": "",
+  "shared_cpus": "",
+  "total_available_cpus": 20,
+  "remaining_available_cpus": 4,
+  "error": "Insufficient CPUs available. Requested: 25, Available: 4"
 }
 ```
 
 ### 2. List Allocations (`list_allocations`)
+
 Get all current snap allocations:
 
 ```json
 {
-    "version": "1.0",
-    "snap_name": "any-snap",
-    "action": "list_allocations"
+  "version": "1.0",
+  "snap_name": "any-snap",
+  "action": "list_allocations"
 }
 ```
 
 **Note:** The `cores_requested` field is optional for `list_allocations` and will be ignored if provided.
 
 **Response:**
+
 ```json
 {
-    "version": "1.0",
-    "total_allocations": 2,
-    "total_allocated_cpus": 18,
-    "total_available_cpus": 20,
-    "remaining_available_cpus": 2,
-    "allocations": [
-        {
-            "snap_name": "my-snap",
-            "allocated_cores": "0-15",
-            "cores_count": 16
-        },
-        {
-            "snap_name": "another-snap",
-            "allocated_cores": "16-17",
-            "cores_count": 2
-        }
-    ],
-    "error": ""
+  "version": "1.0",
+  "total_allocations": 2,
+  "total_allocated_cpus": 18,
+  "total_available_cpus": 20,
+  "remaining_available_cpus": 2,
+  "allocations": [
+    {
+      "snap_name": "my-snap",
+      "allocated_cores": "0-15",
+      "cores_count": 16
+    },
+    {
+      "snap_name": "another-snap",
+      "allocated_cores": "16-17",
+      "cores_count": 2
+    }
+  ],
+  "error": ""
 }
 ```
 
 ## Response Field Descriptions
 
 ### Allocate Cores Response
+
 - `snap_name`: Name of the snap that was allocated cores
 - `cores_requested`: Number of cores that were requested
 - `cores_allocated`: Number of cores that were actually allocated
@@ -128,6 +144,7 @@ Get all current snap allocations:
 - `remaining_available_cpus`: Number of CPUs still available for allocation
 
 ### List Allocations Response
+
 - `total_allocations`: Total number of snap allocations
 - `total_allocated_cpus`: Total number of CPUs allocated across all snaps
 - `total_available_cpus`: Total number of CPUs available in the system
@@ -166,25 +183,46 @@ pip install tox
 
 ### Testing
 
-The project includes a comprehensive test suite with both unit and integration tests:
+The project includes a comprehensive test suite with unit, integration, and functional tests:
 
 ```bash
-# Run all tests
+# Run all tests and checks
 tox
 
 # Run specific test environments
-tox -e unit          # Unit tests (16 tests)
-tox -e integration   # Integration tests (1 test)
+tox -e unit          # Run Unit tests
+tox -e integration   # Run Integration tests
+tox -e functional    # Functional tests - deploys and tests the snap
 tox -e lint          # Code style checks
 tox -e fmt           # Code formatting
+tox -e snap          # Build the snap package
+```
 
+**Functional Testing:**
+The `tox -e functional` environment performs comprehensive real-world testing:
+
+- Builds the snap package
+- Installs the snap in devmode
+- Tests snap daemon startup and service status
+- Verifies Unix socket creation and permissions
+- Tests all API endpoints with real requests
+- Validates CPU allocation logic in a deployed environment
+- Tests error handling and edge cases
+- Verifies concurrent request handling
+- Tests snap restart functionality
+- Automatically cleans up after testing
+
+**Note:** Functional tests require sudo privileges for snap installation and management.
 
 ## Build and Deploy
 
 ### Build Snap
 
 ```bash
-# Build the snap
+# Build the snap using tox (recommended)
+tox -e snap
+
+# Alternative: Build directly with snapcraft
 snapcraft --use-lxd
 ```
 

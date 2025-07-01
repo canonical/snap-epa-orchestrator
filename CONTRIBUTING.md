@@ -8,8 +8,7 @@ the EPA Orchestrator snap.
 - Generally, before developing enhancements to this snap, you should consider [opening an issue
   ](https://github.com/canonical/snap-epa-orchestrator/issues) explaining your use case.
 - If you would like to chat with us about your use-cases or proposed implementation, you can reach
-  us at [Canonical Mattermost public channel](https://chat.charmhub.io/charmhub/channels/charm-dev)
-  or [Discourse](https://discourse.charmhub.io/).
+  us at [Canonical Mattermost public channel](https://chat.canonical.com/canonical/channels/sunbeam)
 - Familiarising yourself with [Snaps and Snapcraft](https://snapcraft.io/docs) documentation
   will help you a lot when working on new features or bug fixes.
 - All enhancements require review before being merged. Code review typically examines
@@ -34,14 +33,15 @@ The project includes a comprehensive test suite with both unit and integration t
 ```shell
 tox -e fmt           # update your code according to linting rules
 tox -e lint          # code style
-tox -e unit          # unit tests (17 tests)
-tox -e integration   # integration tests (1 test)
+tox -e unit          # run unit tests
+tox -e integration   # run integration tests
 tox                  # runs 'lint' and 'unit' environments
 ```
 
 #### Test Structure
 
 - **Unit Tests** (`tests/unit/`): 16 tests covering core functionality
+
   - `test_allocations_db.py`: Database operations and CPU allocation tracking
   - `test_cpu_pinning.py`: CPU pinning logic and isolated CPU detection
   - `test_schemas.py`: Request/response schema validation
