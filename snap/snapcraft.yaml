@@ -1,6 +1,6 @@
 name: epa-orchestrator
-base: core22
-version: '2025.1'
+base: core24
+version: "2025.1"
 summary: EPA orchestrator for OpenStack Hypervisor
 
 description: |
@@ -12,7 +12,7 @@ confinement: strict
 
 apps:
   daemon:
-    command: 'bin/daemon'
+    command: "bin/daemon"
     daemon: simple
     plugs:
       - network-bind
@@ -24,7 +24,7 @@ parts:
     source: bin/
     plugin: dump
     organize:
-      '*': bin/
+      "*": bin/
 
   epa-orchestrator:
     plugin: python

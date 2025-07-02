@@ -4,7 +4,7 @@
 """In-memory database for tracking snap CPU allocations."""
 
 import logging
-from typing import Dict, List, Optional, Set
+from typing import Dict, Optional, Set
 
 from .schemas import SnapAllocation
 
@@ -12,13 +12,13 @@ from .schemas import SnapAllocation
 class AllocationsDB:
     """In-memory database for tracking snap CPU allocations."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the allocations database."""
         self._allocations: Dict[str, str] = {}
         self._allocated_cpus: Set[int] = set()
         logging.info("Allocations database initialized")
 
-    def _parse_cpu_ranges(self, cpu_ranges: str) -> Set[int]:
+    def _parse_cpu_ranges(self, cpu_ranges: str) -> set[int]:
         """Parse CPU ranges string into a set of CPU numbers.
 
         Args:
@@ -33,7 +33,7 @@ class AllocationsDB:
         if not cpu_ranges.strip():
             return set()
 
-        cpus = set()
+        cpus: set[int] = set()
         for part in cpu_ranges.split(","):
             part = part.strip()
             if not part:
@@ -47,7 +47,7 @@ class AllocationsDB:
                 cpus.add(int(part))
         return cpus
 
-    def get_available_cpus(self, total_cpus: str) -> List[int]:
+    def get_available_cpus(self, total_cpus: str) -> list[int]:
         """Get list of available CPUs that haven't been allocated.
 
         Args:
@@ -106,7 +106,7 @@ class AllocationsDB:
         """
         return self._allocations.get(snap_name)
 
-    def get_all_allocations(self) -> List[SnapAllocation]:
+    def get_all_allocations(self) -> list[SnapAllocation]:
         """Get all snap allocations.
 
         Returns:
@@ -167,7 +167,7 @@ class AllocationsDB:
             return len(self._parse_cpu_ranges(allocation))
         return 0
 
-    def get_system_stats(self, total_cpus: str) -> dict:
+    def get_system_stats(self, total_cpus: str) -> dict[str, int]:
         """Get system statistics for CPU allocation.
 
         Args:
@@ -189,4 +189,4 @@ class AllocationsDB:
 
 
 # Global instance of the allocations database
-allocations_db = AllocationsDB()
+allocations_db: AllocationsDB = AllocationsDB()

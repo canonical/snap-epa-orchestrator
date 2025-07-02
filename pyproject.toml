@@ -32,7 +32,6 @@ classifiers = [
 ]
 
 dependencies = [
-    "snap-helpers @ git+https://github.com/albertodonato/snap-helpers@46803aa9d52cc0bb24f76df878dd1010fc08e6a0",
     "pydantic",
     "cryptography>=38.0.0,<42,!=40.0.0,!=40.0.1",  # PyOpenSSL requirements
 ]
@@ -42,6 +41,7 @@ dev= [
     "coverage[toml]",
     "pytest",
     "pytest-mock",
+    "mypy",
 ]
 
 [project.urls]
@@ -93,18 +93,17 @@ exclude = [
 ]
 select = ["E", "W", "F", "C", "N", "R", "D", "H"]
 # Ignore W503, E501 because using black creates errors with this
-# Ignore D107 Missing docstring in __init__
-ignore = ["W503", "E501", "D107"]
-# D100, D101, D102, D103: Ignore missing docstrings in tests
-per-file-ignores = [
-    "tests/*:D100,D101,D102,D103,D104",
-    "setup.py:D100",
-    "openstack_hypervisor/*:D100",
-    "openstack_hypervisor/__init__.py:D104,C801"
-]
+ignore = ["W503", "E501"]
 docstring-convention = "google"
 # Check for properly formatted copyright header in each file
 copyright-check = "True"
 copyright-author = "Canonical Ltd."
 copyright-regexp = "(?i)# SPDX-FileCopyrightText:\\s\\d{4}(-(\\d{4}|present))*"
 #copyright-regexp = "Copyright\\s\\d{4}([-,]\\d{4})*\\s+%(author)s"
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+strict = true
+show_error_codes = true
+pretty = true

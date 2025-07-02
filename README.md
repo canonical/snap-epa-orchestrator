@@ -8,9 +8,20 @@ This repository contains the source for the EPA Orchestrator snap.
 
 - **CPU Pinning and Allocation**: Dynamically allocate isolated and shared CPU sets to snaps and workloads, supporting both dedicated and shared CPU usage models.
 - **Resource Introspection**: Query current allocations and available resources via a secure API.
-- **Snap Integration**: Designed for seamless integration with other snaps (e.g., openstack-hypervisor) using the slot/plug mechanism.
 - **Secure Unix Socket API**: All orchestration actions are performed via a secure, local Unix socket with JSON-based requests and responses.
-- **Policy-Driven Design**: Built to support future policy enforcement for resource allocation and isolation.
+
+### CPU Allocation Policy: Small vs. Large Systems
+
+When a client requests core allocation with `cores_requested: 0`, EPA Orchestrator applies a policy based on the total number of CPUs detected:
+
+- **Small systems (≤100 CPUs):**
+  - By default, 80% of the available CPUs are allocated to the requesting snap or workload.
+  - The remaining 20% are left unallocated (shared).
+- **Large systems (>100 CPUs):**
+  - By default, 15 CPUs are always reserved (left unallocated/shared).
+  - All other CPUs are allocated to the requesting snap or workload.
+
+This policy ensures that on large servers, a fixed number of CPUs are always available for system or shared use, while on smaller systems, a proportional allocation is used.
 
 ### Planned Features
 
@@ -55,6 +66,30 @@ Request CPU allocation for a specific snap:
 
 - `cores_requested`: Number of cores to allocate (0 = 80% of total CPUs)
 
+#### Response Example (Success)
+
+```json
+{
+  "version": "1.0",
+  "snap_name": "my-snap",
+  "cores_requested": 2,
+  "cores_allocated": 2,
+  "allocated_cores": "0-1",
+  "shared_cpus": "2-19",
+  "total_available_cpus": 20,
+  "remaining_available_cpus": 18
+}
+```
+
+#### Response Example (Error)
+
+```json
+{
+  "version": "1.0",
+  "error": "Insufficient CPUs available. Requested: 100, Available: 20"
+}
+```
+
 #### 2. List Allocations (`list_allocations`)
 
 Get all current snap allocations:
@@ -97,19 +132,14 @@ sudo snap install --dangerous epa-orchestrator_*.snap
 
 ## Testing
 
-The project includes unit, integration, and functional tests. To run all tests:
-
-```bash
-tox
-```
-
-Or run specific test environments:
+The project includes unit, integration, and functional tests.
 
 ```bash
 tox -e unit
 tox -e integration
 tox -e lint
 tox -e fmt
+tox -e mypy
 ```
 
 **Note:** Functional tests require sudo privileges for snap installation and management.

@@ -4,7 +4,7 @@
 """Utility functions for CPU range operations."""
 
 
-def to_ranges(cpu_list):
+def to_ranges(cpu_list: list[int]) -> str:
     """Convert CPU cores list to CPU range in string format.
 
     Args:

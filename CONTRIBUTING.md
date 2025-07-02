@@ -8,8 +8,8 @@ the EPA Orchestrator snap.
 - Generally, before developing enhancements to this snap, you should consider [opening an issue
   ](https://github.com/canonical/snap-epa-orchestrator/issues) explaining your use case.
 - If you would like to chat with us about your use-cases or proposed implementation, you can reach
-  us at [Canonical Mattermost public channel](https://chat.canonical.com/canonical/channels/sunbeam)
-  or [Discourse](https://discourse.charmhub.io/)
+  us at [Canonical Mattermost public channel](https://matrix.to/#/#openstack-sunbeam:ubuntu.com)
+  or [Discourse](https://discourse.ubuntu.com/)
 - Familiarising yourself with [Snaps and Snapcraft](https://snapcraft.io/docs) documentation
   will help you a lot when working on new features or bug fixes.
 - All enhancements require review before being merged. Code review typically examines

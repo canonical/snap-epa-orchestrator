@@ -12,10 +12,16 @@ from pathlib import Path
 import pytest
 
 from epa_orchestrator.daemon_handler import handle_daemon_request
-from epa_orchestrator.schemas import ActionType, AllocateCoresResponse, EpaRequest
+from epa_orchestrator.schemas import (
+    ActionType,
+    AllocateCoresRequest,
+    AllocateCoresResponse,
+)
 
 
 class TestSocketCommunication:
+    """Integration tests for socket communication with the daemon."""
+
     @pytest.fixture
     def socket_path(self, tmp_path):
         """Create a temporary socket path."""
@@ -61,7 +67,7 @@ class TestSocketCommunication:
     def test_allocate_cores_via_socket(self, daemon_server, socket_path):
         """Test allocating cores through socket communication."""
         # Prepare request
-        request = EpaRequest(
+        request = AllocateCoresRequest(
             snap_name="snap1", action=ActionType.ALLOCATE_CORES, cores_requested=1
         )
 
@@ -75,5 +81,4 @@ class TestSocketCommunication:
         response = AllocateCoresResponse.model_validate_json(response_data.decode())
         assert response.snap_name == "snap1"
         assert response.cores_allocated == 1
-        assert response.error == ""
         assert response.allocated_cores != ""

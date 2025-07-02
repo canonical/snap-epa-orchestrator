@@ -22,7 +22,8 @@ assert result["total_allocated_cpus"] >= 0
 assert result["total_available_cpus"] > 0
 assert result["remaining_available_cpus"] >= 0
 assert "allocations" in result
-assert result["error"] == ""
+if "error" in result:
+    assert False, f"Unexpected error in response: {result['error']}"
 
 sock.close()
 print("List allocations test passed!")

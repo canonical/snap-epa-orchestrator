@@ -8,13 +8,20 @@ from unittest.mock import patch
 import pytest
 
 from epa_orchestrator.cpu_pinning import calculate_cpu_pinning, get_isolated_cpus
-from epa_orchestrator.schemas import ActionType, AllocateCoresResponse, EpaRequest
+from epa_orchestrator.schemas import (
+    ActionType,
+    AllocateCoresRequest,
+    AllocateCoresResponse,
+)
 
 
 class TestDaemonIntegration:
+    """Unit tests for daemon integration logic."""
+
     def test_allocate_cores_request(self, fresh_allocations_db, mock_cpu_files):
+        """Test allocation of cores via daemon request."""
         with patch("epa_orchestrator.cpu_pinning.get_isolated_cpus", return_value="0-3,6-7"):
-            request = EpaRequest(
+            request = AllocateCoresRequest(
                 snap_name="snap1", action=ActionType.ALLOCATE_CORES, cores_requested=2
             )
             isolated = get_isolated_cpus()
@@ -34,5 +41,6 @@ class TestDaemonIntegration:
             assert response.cores_allocated == 2
 
     def test_error_handling(self):
+        """Test error handling in daemon integration."""
         with pytest.raises(Exception):
-            EpaRequest(snap_name="snap1", action="bad_action")
+            AllocateCoresRequest(snap_name="snap1", action="bad_action", cores_requested=2)

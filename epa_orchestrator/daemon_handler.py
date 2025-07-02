@@ -5,15 +5,18 @@
 
 import json
 import logging
+from typing import Union
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from epa_orchestrator.allocations_db import allocations_db
 from epa_orchestrator.cpu_pinning import calculate_cpu_pinning, get_isolated_cpus
 from epa_orchestrator.schemas import (
-    ActionType,
+    AllocateCoresRequest,
     AllocateCoresResponse,
     EpaRequest,
+    ErrorResponse,
+    ListAllocationsRequest,
     ListAllocationsResponse,
     SnapAllocation,
 )
@@ -22,7 +25,7 @@ from epa_orchestrator.utils import _count_cpus_in_ranges
 logging.basicConfig(level=logging.INFO)
 
 
-def handle_allocate_cores(request: EpaRequest) -> AllocateCoresResponse:
+def handle_allocate_cores(request: AllocateCoresRequest) -> AllocateCoresResponse:
     """Handle allocate cores action.
 
     Args:
@@ -33,16 +36,7 @@ def handle_allocate_cores(request: EpaRequest) -> AllocateCoresResponse:
     """
     isolated = get_isolated_cpus()
     if not isolated:
-        return AllocateCoresResponse(
-            snap_name=request.snap_name,
-            cores_requested=request.cores_requested or 0,
-            cores_allocated=0,
-            allocated_cores="",
-            shared_cpus="",
-            total_available_cpus=0,
-            remaining_available_cpus=0,
-            error="No CPUs available",
-        )
+        raise ValueError("No CPUs available")
 
     # Get system statistics
     stats = allocations_db.get_system_stats(isolated)
@@ -54,35 +48,15 @@ def handle_allocate_cores(request: EpaRequest) -> AllocateCoresResponse:
     if cores_requested > 0:
         if not allocations_db.can_allocate_cpus(cores_requested, isolated):
             available_cpus = allocations_db.get_available_cpus(isolated)
-            error_msg = f"Insufficient CPUs available. Requested: {cores_requested}, Available: {len(available_cpus)}"
-            logging.error(error_msg)
-            return AllocateCoresResponse(
-                snap_name=request.snap_name,
-                cores_requested=cores_requested,
-                cores_allocated=0,
-                allocated_cores="",
-                shared_cpus="",
-                total_available_cpus=stats["total_available_cpus"],
-                remaining_available_cpus=stats["remaining_available_cpus"],
-                error=error_msg,
+            raise ValueError(
+                f"Insufficient CPUs available. Requested: {cores_requested}, Available: {len(available_cpus)}"
             )
 
     # Calculate CPU allocation
     shared, dedicated = calculate_cpu_pinning(isolated, cores_requested)
 
     if not dedicated:
-        error_msg = f"Failed to allocate {cores_requested} cores"
-        logging.error(error_msg)
-        return AllocateCoresResponse(
-            snap_name=request.snap_name,
-            cores_requested=cores_requested,
-            cores_allocated=0,
-            allocated_cores="",
-            shared_cpus="",
-            total_available_cpus=stats["total_available_cpus"],
-            remaining_available_cpus=stats["remaining_available_cpus"],
-            error=error_msg,
-        )
+        raise ValueError(f"Failed to allocate {cores_requested} cores")
 
     # Store the allocation in the database
     allocations_db.allocate_cores(request.snap_name, dedicated)
@@ -102,7 +76,7 @@ def handle_allocate_cores(request: EpaRequest) -> AllocateCoresResponse:
     )
 
 
-def handle_list_allocations() -> ListAllocationsResponse:
+def handle_list_allocations(request: ListAllocationsRequest) -> ListAllocationsResponse:
     """Handle list allocations action.
 
     Returns:
@@ -110,14 +84,7 @@ def handle_list_allocations() -> ListAllocationsResponse:
     """
     isolated = get_isolated_cpus()
     if not isolated:
-        return ListAllocationsResponse(
-            total_allocations=0,
-            total_allocated_cpus=0,
-            total_available_cpus=0,
-            remaining_available_cpus=0,
-            allocations=[],
-            error="No CPUs available",
-        )
+        raise ValueError("No CPUs available")
 
     # Get system statistics
     stats = allocations_db.get_system_stats(isolated)
@@ -152,44 +119,29 @@ def handle_daemon_request(data: bytes) -> bytes:
     """
     try:
         request_data = json.loads(data.decode())
-        request = EpaRequest(**request_data)
-        if request.action == ActionType.ALLOCATE_CORES:
+        request: Union[AllocateCoresRequest, ListAllocationsRequest] = TypeAdapter(
+            EpaRequest
+        ).validate_python(request_data)
+        response: Union[AllocateCoresResponse, ListAllocationsResponse, ErrorResponse]
+        if isinstance(request, AllocateCoresRequest):
             response = handle_allocate_cores(request)
-        elif request.action == ActionType.LIST_ALLOCATIONS:
-            response = handle_list_allocations()
+        elif isinstance(request, ListAllocationsRequest):
+            response = handle_list_allocations(request)
         else:
-            response = AllocateCoresResponse(
-                snap_name=request.snap_name,
-                cores_requested=request.cores_requested or 0,
-                cores_allocated=0,
-                allocated_cores="",
-                shared_cpus="",
-                total_available_cpus=0,
-                remaining_available_cpus=0,
-                error=f"Unknown action: {request.action}",
+            response = ErrorResponse(
+                error=f"Unknown action: {getattr(request, 'action', None)}",
+                version="1.0",
             )
         return response.model_dump_json().encode()
-    except (ValidationError, json.JSONDecodeError) as e:
-        error_response = AllocateCoresResponse(
-            snap_name="",
-            cores_requested=0,
-            cores_allocated=0,
-            allocated_cores="",
-            shared_cpus="",
-            total_available_cpus=0,
-            remaining_available_cpus=0,
+    except (ValidationError, json.JSONDecodeError, ValueError) as e:
+        error_response = ErrorResponse(
             error=str(e),
+            version="1.0",
         )
         return error_response.model_dump_json().encode()
     except Exception as e:
-        error_response = AllocateCoresResponse(
-            snap_name="",
-            cores_requested=0,
-            cores_allocated=0,
-            allocated_cores="",
-            shared_cpus="",
-            total_available_cpus=0,
-            remaining_available_cpus=0,
+        error_response = ErrorResponse(
             error=str(e),
+            version="1.0",
         )
         return error_response.model_dump_json().encode()
