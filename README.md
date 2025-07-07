@@ -6,9 +6,10 @@ This repository contains the source for the EPA Orchestrator snap.
 
 ## Features
 
-- **CPU Pinning and Allocation**: Dynamically allocate isolated and shared CPU sets to snaps and workloads, supporting both dedicated and shared CPU usage models.
+- **CPU Pinning and Allocation**: Allocate isolated and shared CPU sets to snaps and workloads, supporting both dedicated and shared CPU usage models with basic system-size heuristics.
 - **Resource Introspection**: Query current allocations and available resources via a secure API.
 - **Secure Unix Socket API**: All orchestration actions are performed via a secure, local Unix socket with JSON-based requests and responses.
+- **Basic Allocation Heuristics**: Automatic allocation based on system size (small vs large systems) when no specific core count is requested.
 
 ### CPU Allocation Policy: Small vs. Large Systems
 
@@ -18,7 +19,7 @@ When a client requests core allocation with `cores_requested: 0`, EPA Orchestrat
   - By default, 80% of the available CPUs are allocated to the requesting snap or workload.
   - The remaining 20% are left unallocated (shared).
 - **Large systems (>100 CPUs):**
-  - By default, 15 CPUs are always reserved (left unallocated/shared).
+  - By default, 16 CPUs are always reserved (left unallocated/shared).
   - All other CPUs are allocated to the requesting snap or workload.
 
 This policy ensures that on large servers, a fixed number of CPUs are always available for system or shared use, while on smaller systems, a proportional allocation is used.
@@ -137,6 +138,7 @@ The project includes unit, integration, and functional tests.
 ```bash
 tox -e unit
 tox -e integration
+tox -e functional
 tox -e lint
 tox -e fmt
 tox -e mypy

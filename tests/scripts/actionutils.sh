@@ -50,7 +50,7 @@ function wait_for_container_running() {
 }
 
 function test_socket_api() {
-    echo "Testing EPA Orchestrator socket API"
+    echo "Testing EPA Orchestrator socket API using pytest"
     
     SOCKET_PATH="/var/snap/${SNAP_NAME}/current/data/epa.sock"
     
@@ -68,13 +68,11 @@ function test_socket_api() {
         return 1
     fi
     
-    # Test core allocation
-    echo "Testing basic core allocation..."
-    SOCKET_PATH=$SOCKET_PATH python3 scripts/allocate_cores.py --snap test-snap --cores 2
+    # Install pytest dependencies
+    python3 -m pip install pytest pytest-mock pytest-cov
     
-    # Test list allocations
-    echo "Testing list allocations..."
-    SOCKET_PATH=$SOCKET_PATH python3 scripts/list_allocations.py
+    # Run pytest integration tests
+    SOCKET_PATH=$SOCKET_PATH python3 -m pytest tests/integration/ -v --tb=short
     
     echo "All socket API tests passed!"
 }
