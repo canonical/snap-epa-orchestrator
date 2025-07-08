@@ -8,6 +8,7 @@ import socket
 import threading
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -16,6 +17,9 @@ from epa_orchestrator.schemas import (
     ActionType,
     AllocateCoresRequest,
     AllocateCoresResponse,
+    ErrorResponse,
+    ListAllocationsRequest,
+    ListAllocationsResponse,
 )
 
 
@@ -30,8 +34,16 @@ class TestSocketCommunication:
         return str(socket_dir / "epa.sock")
 
     @pytest.fixture
-    def daemon_server(self, socket_path, monkeypatch):
-        """Start a daemon server in a separate thread."""
+    def socket_daemon(self, socket_path, monkeypatch, request):
+        """Start a socket-based daemon server in a separate thread, with optional patching."""
+        # Patch get_isolated_cpus if provided
+        patcher = getattr(request, "param", None)
+        if patcher is not None:
+            patch_ctx = patcher()
+            patch_ctx.__enter__()
+        else:
+            patch_ctx = None
+
         # Mock the socket path in the daemon
         monkeypatch.setenv("SNAP_DATA", str(Path(socket_path).parent.parent))
 
@@ -39,16 +51,20 @@ class TestSocketCommunication:
         server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server_sock.bind(socket_path)
         os.chmod(socket_path, 0o666)
-        server_sock.listen(1)
+        server_sock.listen(5)
 
         def server_handler():
-            """Handle daemon requests."""
-            conn, _ = server_sock.accept()
-            with conn:
-                data = conn.recv(1024)
-                if data:
-                    response_bytes = handle_daemon_request(data)
-                    conn.sendall(response_bytes)
+            """Handle daemon requests (accept multiple connections)."""
+            for _ in range(10):
+                try:
+                    conn, _ = server_sock.accept()
+                except OSError:
+                    break  # Socket closed
+                with conn:
+                    data = conn.recv(1024)
+                    if data:
+                        response_bytes = handle_daemon_request(data)
+                        conn.sendall(response_bytes)
 
         # Start server thread
         server_thread = threading.Thread(target=server_handler, daemon=True)
@@ -63,8 +79,26 @@ class TestSocketCommunication:
         server_sock.close()
         if Path(socket_path).exists():
             Path(socket_path).unlink()
+        if patch_ctx is not None:
+            patch_ctx.__exit__(None, None, None)
 
-    def test_allocate_cores_via_socket(self, daemon_server, socket_path):
+    def patch_isolated_cpus_valid():
+        """Patch get_isolated_cpus to return a valid CPU range string for tests."""
+        return patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-7")
+
+    def patch_isolated_cpus_error():
+        """Patch get_isolated_cpus to raise a RuntimeError for error scenario tests."""
+        return patch(
+            "epa_orchestrator.daemon_handler.get_isolated_cpus",
+            side_effect=RuntimeError("No Isolated CPUs configured"),
+        )
+
+    @pytest.mark.parametrize(
+        "socket_daemon",
+        [patch_isolated_cpus_valid],
+        indirect=True,
+    )
+    def test_allocate_cores_via_socket(self, socket_daemon, socket_path):
         """Test allocating cores through socket communication."""
         # Prepare request
         request = AllocateCoresRequest(
@@ -82,3 +116,75 @@ class TestSocketCommunication:
         assert response.snap_name == "snap1"
         assert response.cores_allocated == 1
         assert response.allocated_cores != ""
+
+    @pytest.mark.parametrize(
+        "socket_daemon",
+        [patch_isolated_cpus_valid],
+        indirect=True,
+    )
+    def test_list_allocations_via_socket(self, socket_daemon, socket_path):
+        """Test listing allocations through socket communication."""
+        request = ListAllocationsRequest(snap_name="any-snap", action=ActionType.LIST_ALLOCATIONS)
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+            client.sendall(request.model_dump_json().encode())
+            response_data = client.recv(4096)
+
+        response = ListAllocationsResponse.model_validate_json(response_data.decode())
+        assert response.total_allocations >= 0
+        assert response.total_allocated_cpus >= 0
+        assert response.total_available_cpus > 0
+        assert response.remaining_available_cpus >= 0
+        assert isinstance(response.allocations, list)
+
+    @pytest.mark.parametrize(
+        "socket_daemon",
+        [patch_isolated_cpus_valid],
+        indirect=True,
+    )
+    def test_multiple_allocations(self, socket_daemon, socket_path):
+        """Test multiple allocation requests: some succeed, one fails due to insufficient CPUs."""
+        req1 = AllocateCoresRequest(
+            snap_name="snap1", action=ActionType.ALLOCATE_CORES, cores_requested=4
+        )
+        req2 = AllocateCoresRequest(
+            snap_name="snap2", action=ActionType.ALLOCATE_CORES, cores_requested=4
+        )
+        req3 = AllocateCoresRequest(
+            snap_name="snap3", action=ActionType.ALLOCATE_CORES, cores_requested=1000
+        )
+
+        def send(req):
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                client.connect(socket_path)
+                client.sendall(req.model_dump_json().encode())
+                return client.recv(4096)
+
+        resp1 = AllocateCoresResponse.model_validate_json(send(req1).decode())
+        assert resp1.cores_allocated == 4
+        assert resp1.allocated_cores != ""
+
+        resp2 = AllocateCoresResponse.model_validate_json(send(req2).decode())
+        assert resp2.cores_allocated == 4
+        assert resp2.allocated_cores != ""
+
+        resp3 = ErrorResponse.model_validate_json(send(req3).decode())
+        assert "Insufficient CPUs available." in resp3.error
+
+    @pytest.mark.parametrize(
+        "socket_daemon",
+        [patch_isolated_cpus_error],
+        indirect=True,
+    )
+    def test_no_isolated_cpus_configured(self, socket_daemon, socket_path):
+        """Test error response when no isolated CPUs are configured."""
+        req = AllocateCoresRequest(
+            snap_name="snap1", action=ActionType.ALLOCATE_CORES, cores_requested=2
+        )
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+            client.sendall(req.model_dump_json().encode())
+            response_data = client.recv(4096)
+        resp = ErrorResponse.model_validate_json(response_data.decode())
+        assert resp.error == "No Isolated CPUs configured"

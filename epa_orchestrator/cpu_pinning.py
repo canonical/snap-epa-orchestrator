@@ -4,6 +4,7 @@
 """Utility methods for calculating dedicated and shared vCPUs."""
 
 import logging
+import os
 
 from .utils import to_ranges
 
@@ -15,32 +16,34 @@ RESERVED_CORES_LARGE_SYSTEM = 16  # Number of cores to reserve on large systems
 
 
 def get_isolated_cpus() -> str:
-    """Get the list of isolated CPUs from ISOLATED_CPUS_PATH.
-
-    If no isolated CPUs are found, falls back to using all present CPUs.
+    """Get the list of isolated CPUs from snap config or system file.
 
     Returns:
-        str: Comma-separated list of CPU ranges that are isolated or present
+        str: Comma-separated list of CPU ranges that are isolated
+
+    Raises:
+        RuntimeError: If no isolated CPUs are configured
     """
+    snap_data = os.environ.get("SNAP_DATA")
+    if snap_data:
+        config_path = os.path.join(snap_data, "config", "epa_test_isolated_cpus")
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                value = f.read().strip()
+                if value:
+                    return value
+    # Fallback to system file
     try:
         with open(ISOLATED_CPUS_PATH, "r") as f:
-            isolated = f.read().strip()
-            if isolated:
-                logging.info(f"Found isolated CPUs: {isolated}")
-                return isolated
-
-        logging.info("No isolated CPUs found, falling back to present CPUs")
-        with open(PRESENT_CPUS_PATH, "r") as f:
-            present = f.read().strip()
-            if present:
-                logging.info(f"Using present CPUs: {present}")
-                return present
-
-        logging.error("Could not find any CPUs (neither isolated nor present)")
-        return ""
+            value = f.read().strip()
+            if value:
+                logging.info(f"Found isolated CPUs: {value}")
+                return value
+        logging.error("No Isolated CPUs configured")
+        raise RuntimeError("No Isolated CPUs configured")
     except Exception as e:
         logging.error(f"Failed to get CPU information: {e}")
-        return ""
+        raise RuntimeError("No Isolated CPUs configured") from e
 
 
 def calculate_cpu_pinning(cpu_list: str, cores_requested: int = 0) -> "tuple[str, str]":

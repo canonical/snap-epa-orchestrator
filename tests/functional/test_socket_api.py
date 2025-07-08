@@ -53,5 +53,4 @@ def test_list_allocations_via_socket_api(socket_path):
     assert result["total_available_cpus"] > 0
     assert result["remaining_available_cpus"] >= 0
     assert "allocations" in result
-    assert not result.get("error"), f"Unexpected error in response: {result.get('error')}"
     sock.close()

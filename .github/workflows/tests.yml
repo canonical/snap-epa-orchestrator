@@ -114,6 +114,10 @@ jobs:
         run: ~/actionutils.sh free_runner_disk
       - name: Install snap
         run: ~/actionutils.sh install_snap
+      - name: Verify snap installation
+        run: |
+          sudo snap list | grep epa-orchestrator
+          sudo snap services epa-orchestrator
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -121,7 +125,16 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pytest-mock pytest-cov
+          python -m pip install pytest==8.4.1 pytest-mock==3.14.1 pytest-cov==6.2.1
+      - name: Verify pytest installation
+        run: |
+          python3 -m pytest --version
+          python3 -m pip show pytest-mock
+          python3 -m pip show pytest-cov
+      - name: Set test isolated CPUs for snap
+        run: |
+          sudo snap set epa-orchestrator environment.test-isolated-cpus="0-3"
+          sudo systemctl restart snap.epa-orchestrator.daemon.service
       - name: Run functional tests
         env:
           SOCKET_PATH: /var/snap/epa-orchestrator/current/data/epa.sock
@@ -139,8 +152,13 @@ jobs:
             echo "ERROR: Socket not created after $timeout seconds"
             exit 1
           fi
-          # Run pytest functional tests
-          cd tests/functional && python -m pytest . -v --tb=short --import-mode=importlib --confcutdir=.
+          # Run pytest functional tests with verbose output
+          echo "Running functional tests..."
+          cd tests/functional && python3 -m pytest . -v --tb=short --import-mode=importlib --confcutdir=. || {
+            echo "Functional tests failed. Checking socket status..."
+            ls -la "$SOCKET_PATH" || echo "Socket not found"
+            exit 1
+          }
       - name: Print logs for failure
         if: failure()
         run: ~/actionutils.sh print_logs

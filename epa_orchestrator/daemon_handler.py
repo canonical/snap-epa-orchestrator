@@ -34,7 +34,10 @@ def handle_allocate_cores(request: AllocateCoresRequest) -> AllocateCoresRespons
     Returns:
         AllocateCoresResponse with detailed allocation information
     """
-    isolated = get_isolated_cpus()
+    try:
+        isolated = get_isolated_cpus()
+    except RuntimeError as e:
+        raise ValueError("No Isolated CPUs configured") from e
     if not isolated:
         raise ValueError("No CPUs available")
 
@@ -133,7 +136,19 @@ def handle_daemon_request(data: bytes) -> bytes:
                 version="1.0",
             )
         return response.model_dump_json().encode()
-    except (ValidationError, json.JSONDecodeError, ValueError) as e:
+    except (ValidationError, json.JSONDecodeError) as e:
+        error_response = ErrorResponse(
+            error=str(e),
+            version="1.0",
+        )
+        return error_response.model_dump_json().encode()
+    except ValueError as e:
+        if str(e) == "No Isolated CPUs configured":
+            error_response = ErrorResponse(
+                error="No Isolated CPUs configured",
+                version="1.0",
+            )
+            return error_response.model_dump_json().encode()
         error_response = ErrorResponse(
             error=str(e),
             version="1.0",

@@ -8,10 +8,12 @@ from unittest.mock import patch
 import pytest
 
 from epa_orchestrator.cpu_pinning import calculate_cpu_pinning, get_isolated_cpus
+from epa_orchestrator.daemon_handler import handle_daemon_request
 from epa_orchestrator.schemas import (
     ActionType,
     AllocateCoresRequest,
     AllocateCoresResponse,
+    ErrorResponse,
 )
 
 
@@ -44,3 +46,19 @@ class TestDaemonIntegration:
         """Test error handling in daemon integration."""
         with pytest.raises(Exception):
             AllocateCoresRequest(snap_name="snap1", action="bad_action", cores_requested=2)
+
+    def test_allocate_cores_no_isolated_cpus(self):
+        """Test error response when no isolated CPUs are configured in daemon handler."""
+        with patch(
+            "epa_orchestrator.cpu_pinning.get_isolated_cpus",
+            side_effect=RuntimeError("No Isolated CPUs configured"),
+        ):
+            request = {
+                "version": "1.0",
+                "snap_name": "snap1",
+                "action": "allocate_cores",
+                "cores_requested": 2,
+            }
+            response_bytes = handle_daemon_request(bytes(str(request).replace("'", '"'), "utf-8"))
+            resp = ErrorResponse.model_validate_json(response_bytes.decode())
+            assert resp.error == "No Isolated CPUs configured"

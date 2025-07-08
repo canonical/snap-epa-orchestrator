@@ -49,34 +49,6 @@ function wait_for_container_running() {
     return 1
 }
 
-function test_socket_api() {
-    echo "Testing EPA Orchestrator socket API using pytest"
-    
-    SOCKET_PATH="/var/snap/${SNAP_NAME}/current/data/epa.sock"
-    
-    # Wait for socket to be available
-    timeout=30
-    for i in $(seq 1 $timeout); do
-        if [ -S "$SOCKET_PATH" ]; then
-            break
-        fi
-        echo "Waiting for socket to be created... ($i/$timeout)"
-        sleep 1
-    done
-    if ! [ -S "$SOCKET_PATH" ]; then
-        echo "ERROR: Socket not created after $timeout seconds"
-        return 1
-    fi
-    
-    # Install pytest dependencies
-    python3 -m pip install pytest pytest-mock pytest-cov
-    
-    # Run pytest integration tests
-    SOCKET_PATH=$SOCKET_PATH python3 -m pytest tests/integration/ -v --tb=short
-    
-    echo "All socket API tests passed!"
-}
-
 function print_logs() {
     echo "==== Snap Logs ===="
     sudo snap logs $SNAP_NAME -n 1000 || true
