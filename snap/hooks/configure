@@ -1,7 +1,0 @@
-#!/bin/sh
-set -e
-
-TEST_ISOLATED_CPUS=$(snapctl get environment.test-isolated-cpus 2>/dev/null || echo "")
-
-mkdir -p "$SNAP_DATA/config"
-echo "$TEST_ISOLATED_CPUS" > "$SNAP_DATA/config/epa_test_isolated_cpus" 

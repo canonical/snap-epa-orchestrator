@@ -4,7 +4,6 @@
 """Utility methods for calculating dedicated and shared vCPUs."""
 
 import logging
-import os
 
 from .utils import to_ranges
 
@@ -16,7 +15,7 @@ RESERVED_CORES_LARGE_SYSTEM = 16  # Number of cores to reserve on large systems
 
 
 def get_isolated_cpus() -> str:
-    """Get the list of isolated CPUs from snap config or system file.
+    """Get the list of isolated CPUs from the system file.
 
     Returns:
         str: Comma-separated list of CPU ranges that are isolated
@@ -24,15 +23,6 @@ def get_isolated_cpus() -> str:
     Raises:
         RuntimeError: If no isolated CPUs are configured
     """
-    snap_data = os.environ.get("SNAP_DATA")
-    if snap_data:
-        config_path = os.path.join(snap_data, "config", "epa_test_isolated_cpus")
-        if os.path.exists(config_path):
-            with open(config_path) as f:
-                value = f.read().strip()
-                if value:
-                    return value
-    # Fallback to system file
     try:
         with open(ISOLATED_CPUS_PATH, "r") as f:
             value = f.read().strip()

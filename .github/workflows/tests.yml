@@ -118,6 +118,7 @@ jobs:
         run: |
           sudo snap list | grep epa-orchestrator
           sudo snap services epa-orchestrator
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -131,10 +132,6 @@ jobs:
           python3 -m pytest --version
           python3 -m pip show pytest-mock
           python3 -m pip show pytest-cov
-      - name: Set test isolated CPUs for snap
-        run: |
-          sudo snap set epa-orchestrator environment.test-isolated-cpus="0-3"
-          sudo systemctl restart snap.epa-orchestrator.daemon.service
       - name: Run functional tests
         env:
           SOCKET_PATH: /var/snap/epa-orchestrator/current/data/epa.sock

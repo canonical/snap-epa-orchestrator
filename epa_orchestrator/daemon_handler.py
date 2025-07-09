@@ -85,7 +85,10 @@ def handle_list_allocations(request: ListAllocationsRequest) -> ListAllocationsR
     Returns:
         ListAllocationsResponse with detailed allocation information
     """
-    isolated = get_isolated_cpus()
+    try:
+        isolated = get_isolated_cpus()
+    except RuntimeError as e:
+        raise ValueError("No Isolated CPUs configured") from e
     if not isolated:
         raise ValueError("No CPUs available")
 

@@ -26,12 +26,6 @@ parts:
     organize:
       "*": bin/
 
-  hooks:
-    source: snap/hooks/
-    plugin: dump
-    organize:
-      "*": meta/hooks/
-
   epa-orchestrator:
     plugin: python
     source: .
