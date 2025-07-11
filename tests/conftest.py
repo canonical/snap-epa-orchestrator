@@ -83,8 +83,8 @@ def fresh_allocations_db():
 def populated_allocations_db():
     """Create an AllocationsDB instance with some test allocations."""
     db = AllocationsDB()
-    db.allocate_cores("test-snap-1", "0-1")
-    db.allocate_cores("test-snap-2", "2,4")
+    db.allocate_cores("test-service-1", "0-1")
+    db.allocate_cores("test-service-2", "2,4")
     return db
 
 
@@ -96,7 +96,7 @@ def snap_env():
         "SNAP_COMMON": "/var/snap/epa-orchestrator/common",
         "SNAP_DATA": "/var/snap/epa-orchestrator/1",
         "SNAP_INSTANCE_NAME": "",
-        "SNAP_NAME": "epa-orchestrator",
+        "SERVICE_NAME": "epa-orchestrator",
         "SNAP_REVISION": "1",
         "SNAP_VERSION": "2025.1",
     }

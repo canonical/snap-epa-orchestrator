@@ -21,7 +21,7 @@ class AllocateCoresRequest(BaseModel):
 
     version: Literal["1.0"] = Field(default=API_VERSION)
     action: Literal[ActionType.ALLOCATE_CORES]
-    snap_name: str = Field(description="Name of the requesting snap")
+    service_name: str = Field(description="Name of the requesting service")
     cores_requested: int = Field(
         default=0,
         ge=0,
@@ -34,7 +34,7 @@ class ListAllocationsRequest(BaseModel):
 
     version: Literal["1.0"] = Field(default=API_VERSION)
     action: Literal[ActionType.LIST_ALLOCATIONS]
-    snap_name: str = Field(description="Name of the requesting snap")
+    service_name: str = Field(description="Name of the requesting service")
 
 
 EpaRequest = Annotated[
@@ -47,7 +47,7 @@ class AllocateCoresResponse(BaseModel):
     """Pydantic model for allocate cores response."""
 
     version: Literal["1.0"] = Field(default=API_VERSION)
-    snap_name: str = Field(description="Name of the snap that was allocated cores")
+    service_name: str = Field(description="Name of the service that was allocated cores")
     cores_requested: int = Field(description="Number of cores that were requested")
     cores_allocated: int = Field(description="Number of cores that were actually allocated")
     allocated_cores: str = Field(description="Comma-separated list of allocated CPU ranges")
@@ -59,26 +59,26 @@ class AllocateCoresResponse(BaseModel):
 
 
 class SnapAllocation(BaseModel):
-    """Model for snap allocation information."""
+    """Model for service allocation information."""
 
-    snap_name: str = Field(description="Name of the snap")
+    service_name: str = Field(description="Name of the service")
     allocated_cores: str = Field(description="Comma-separated list of allocated CPU ranges")
-    cores_count: int = Field(description="Number of cores allocated to this snap")
+    cores_count: int = Field(description="Number of cores allocated to this service")
 
 
 class ListAllocationsResponse(BaseModel):
     """Pydantic model for list allocations response."""
 
     version: Literal["1.0"] = Field(default=API_VERSION)
-    total_allocations: int = Field(description="Total number of snap allocations")
+    total_allocations: int = Field(description="Total number of service allocations")
     total_allocated_cpus: int = Field(
-        description="Total number of CPUs allocated across all snaps"
+        description="Total number of CPUs allocated across all services"
     )
     total_available_cpus: int = Field(description="Total number of CPUs available in the system")
     remaining_available_cpus: int = Field(
         description="Number of CPUs still available for allocation"
     )
-    allocations: List[SnapAllocation] = Field(description="List of all snap allocations")
+    allocations: List[SnapAllocation] = Field(description="List of all service allocations")
 
 
 class ErrorResponse(BaseModel):

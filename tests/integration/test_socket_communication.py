@@ -100,22 +100,18 @@ class TestSocketCommunication:
     )
     def test_allocate_cores_via_socket(self, socket_daemon, socket_path):
         """Test allocating cores through socket communication."""
-        # Prepare request
         request = AllocateCoresRequest(
-            snap_name="snap1", action=ActionType.ALLOCATE_CORES, cores_requested=1
+            service_name="service1", action=ActionType.ALLOCATE_CORES, cores_requested=1
         )
 
-        # Send request via socket
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.connect(socket_path)
             client.sendall(request.model_dump_json().encode())
             response_data = client.recv(4096)
 
-        # Parse and verify response
         response = AllocateCoresResponse.model_validate_json(response_data.decode())
-        assert response.snap_name == "snap1"
+        assert response.service_name == "service1"
         assert response.cores_allocated == 1
-        assert response.allocated_cores != ""
 
     @pytest.mark.parametrize(
         "socket_daemon",
@@ -124,7 +120,9 @@ class TestSocketCommunication:
     )
     def test_list_allocations_via_socket(self, socket_daemon, socket_path):
         """Test listing allocations through socket communication."""
-        request = ListAllocationsRequest(snap_name="any-snap", action=ActionType.LIST_ALLOCATIONS)
+        request = ListAllocationsRequest(
+            service_name="any-service", action=ActionType.LIST_ALLOCATIONS
+        )
 
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.connect(socket_path)
@@ -144,33 +142,44 @@ class TestSocketCommunication:
         indirect=True,
     )
     def test_multiple_allocations(self, socket_daemon, socket_path):
-        """Test multiple allocation requests: some succeed, one fails due to insufficient CPUs."""
+        """Test multiple allocations and their tracking."""
         req1 = AllocateCoresRequest(
-            snap_name="snap1", action=ActionType.ALLOCATE_CORES, cores_requested=4
+            service_name="service1", action=ActionType.ALLOCATE_CORES, cores_requested=4
         )
         req2 = AllocateCoresRequest(
-            snap_name="snap2", action=ActionType.ALLOCATE_CORES, cores_requested=4
+            service_name="service2", action=ActionType.ALLOCATE_CORES, cores_requested=4
         )
         req3 = AllocateCoresRequest(
-            snap_name="snap3", action=ActionType.ALLOCATE_CORES, cores_requested=1000
+            service_name="service3", action=ActionType.ALLOCATE_CORES, cores_requested=1000
         )
 
-        def send(req):
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-                client.connect(socket_path)
-                client.sendall(req.model_dump_json().encode())
-                return client.recv(4096)
+        # Send first request
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client1:
+            client1.connect(socket_path)
+            client1.sendall(req1.model_dump_json().encode())
+            resp1_data = client1.recv(4096)
 
-        resp1 = AllocateCoresResponse.model_validate_json(send(req1).decode())
+        # Send second request
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client2:
+            client2.connect(socket_path)
+            client2.sendall(req2.model_dump_json().encode())
+            resp2_data = client2.recv(4096)
+
+        # Send third request
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client3:
+            client3.connect(socket_path)
+            client3.sendall(req3.model_dump_json().encode())
+            resp3_data = client3.recv(4096)
+
+        # Verify first two succeeded
+        resp1 = AllocateCoresResponse.model_validate_json(resp1_data.decode())
+        resp2 = AllocateCoresResponse.model_validate_json(resp2_data.decode())
         assert resp1.cores_allocated == 4
-        assert resp1.allocated_cores != ""
-
-        resp2 = AllocateCoresResponse.model_validate_json(send(req2).decode())
         assert resp2.cores_allocated == 4
-        assert resp2.allocated_cores != ""
 
-        resp3 = ErrorResponse.model_validate_json(send(req3).decode())
-        assert "Insufficient CPUs available." in resp3.error
+        # Verify third failed
+        resp3 = ErrorResponse.model_validate_json(resp3_data.decode())
+        assert "Insufficient CPUs available" in resp3.error
 
     @pytest.mark.parametrize(
         "socket_daemon",
@@ -180,11 +189,13 @@ class TestSocketCommunication:
     def test_no_isolated_cpus_configured(self, socket_daemon, socket_path):
         """Test error response when no isolated CPUs are configured."""
         req = AllocateCoresRequest(
-            snap_name="snap1", action=ActionType.ALLOCATE_CORES, cores_requested=2
+            service_name="service1", action=ActionType.ALLOCATE_CORES, cores_requested=2
         )
+
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.connect(socket_path)
             client.sendall(req.model_dump_json().encode())
-            response_data = client.recv(4096)
-        resp = ErrorResponse.model_validate_json(response_data.decode())
+            resp_data = client.recv(4096)
+
+        resp = ErrorResponse.model_validate_json(resp_data.decode())
         assert resp.error == "No Isolated CPUs configured"

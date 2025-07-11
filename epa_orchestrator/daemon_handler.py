@@ -62,14 +62,14 @@ def handle_allocate_cores(request: AllocateCoresRequest) -> AllocateCoresRespons
         raise ValueError(f"Failed to allocate {cores_requested} cores")
 
     # Store the allocation in the database
-    allocations_db.allocate_cores(request.snap_name, dedicated)
+    allocations_db.allocate_cores(request.service_name, dedicated)
 
     # Get updated statistics after allocation
     updated_stats = allocations_db.get_system_stats(isolated)
     cores_allocated = _count_cpus_in_ranges(dedicated)
 
     return AllocateCoresResponse(
-        snap_name=request.snap_name,
+        service_name=request.service_name,
         cores_requested=cores_requested,
         cores_allocated=cores_allocated,
         allocated_cores=dedicated,
@@ -87,21 +87,35 @@ def handle_list_allocations(request: ListAllocationsRequest) -> ListAllocationsR
     """
     try:
         isolated = get_isolated_cpus()
-    except RuntimeError as e:
-        raise ValueError("No Isolated CPUs configured") from e
+    except RuntimeError:
+        # Return empty response when no isolated CPUs are configured
+        return ListAllocationsResponse(
+            total_allocations=0,
+            total_allocated_cpus=0,
+            total_available_cpus=0,
+            remaining_available_cpus=0,
+            allocations=[],
+        )
     if not isolated:
-        raise ValueError("No CPUs available")
+        # Return empty response when no isolated CPUs are available
+        return ListAllocationsResponse(
+            total_allocations=0,
+            total_allocated_cpus=0,
+            total_available_cpus=0,
+            remaining_available_cpus=0,
+            allocations=[],
+        )
 
     # Get system statistics
     stats = allocations_db.get_system_stats(isolated)
 
     # Build detailed allocation list
     allocations = []
-    for snap_name, allocated_cores in allocations_db._allocations.items():
-        cores_count = allocations_db.get_snap_allocation_count(snap_name)
+    for service_name, allocated_cores in allocations_db._allocations.items():
+        cores_count = allocations_db.get_snap_allocation_count(service_name)
         allocations.append(
             SnapAllocation(
-                snap_name=snap_name, allocated_cores=allocated_cores, cores_count=cores_count
+                service_name=service_name, allocated_cores=allocated_cores, cores_count=cores_count
             )
         )
 
@@ -146,12 +160,6 @@ def handle_daemon_request(data: bytes) -> bytes:
         )
         return error_response.model_dump_json().encode()
     except ValueError as e:
-        if str(e) == "No Isolated CPUs configured":
-            error_response = ErrorResponse(
-                error="No Isolated CPUs configured",
-                version="1.0",
-            )
-            return error_response.model_dump_json().encode()
         error_response = ErrorResponse(
             error=str(e),
             version="1.0",

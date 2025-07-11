@@ -54,12 +54,12 @@ Clients can connect to this socket and send JSON requests. The supported actions
 
 #### 1. Allocate Cores (`allocate_cores`)
 
-Request CPU allocation for a specific snap:
+Request CPU allocation for a specific service:
 
 ```json
 {
   "version": "1.0",
-  "snap_name": "my-snap",
+  "service_name": "my-service",
   "action": "allocate_cores",
   "cores_requested": 2
 }
@@ -72,7 +72,7 @@ Request CPU allocation for a specific snap:
 ```json
 {
   "version": "1.0",
-  "snap_name": "my-snap",
+  "service_name": "my-service",
   "cores_requested": 2,
   "cores_allocated": 2,
   "allocated_cores": "0-1",
@@ -93,29 +93,50 @@ Request CPU allocation for a specific snap:
 
 #### 2. List Allocations (`list_allocations`)
 
-Get all current snap allocations:
+Get all current service allocations:
 
 ```json
 {
   "version": "1.0",
-  "snap_name": "any-snap",
+  "service_name": "any-service",
   "action": "list_allocations"
 }
 ```
 
-### Response Example
+#### Response Example (Success)
 
 ```json
 {
   "version": "1.0",
-  "snap_name": "my-snap",
-  "cores_requested": 2,
-  "cores_allocated": 2,
-  "allocated_cores": "0-1",
-  "shared_cpus": "2-19",
+  "total_allocations": 2,
+  "total_allocated_cpus": 4,
   "total_available_cpus": 20,
-  "remaining_available_cpus": 18,
-  "error": ""
+  "remaining_available_cpus": 16,
+  "allocations": [
+    {
+      "service_name": "my-service",
+      "allocated_cores": "0-1",
+      "cores_count": 2
+    },
+    {
+      "service_name": "another-service",
+      "allocated_cores": "2-3",
+      "cores_count": 2
+    }
+  ]
+}
+```
+
+#### Response Example (No Isolated CPUs)
+
+```json
+{
+  "version": "1.0",
+  "total_allocations": 0,
+  "total_allocated_cpus": 0,
+  "total_available_cpus": 0,
+  "remaining_available_cpus": 0,
+  "allocations": []
 }
 ```
 

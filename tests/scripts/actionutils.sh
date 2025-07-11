@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SNAP_NAME="epa-orchestrator"
+SERVICE_NAME="epa-orchestrator"
 
 function cleaript() {
     sudo iptables -P FORWARD ACCEPT  || true
@@ -22,16 +22,16 @@ function free_runner_disk() {
 }
 
 function install_snap() {
-    SNAP_FILE=$(ls ${SNAP_NAME}_*.snap 2>/dev/null | head -n1 || echo "")
+    SNAP_FILE=$(ls ${SERVICE_NAME}_*.snap 2>/dev/null | head -n1 || echo "")
     if [ -z "$SNAP_FILE" ]; then
-        SNAP_FILE=$(ls ~/${SNAP_NAME}_*.snap 2>/dev/null | head -n1 || echo "")
+        SNAP_FILE=$(ls ~/${SERVICE_NAME}_*.snap 2>/dev/null | head -n1 || echo "")
     fi
     if [ -z "$SNAP_FILE" ]; then
         echo "ERROR: No snap file found"
         return 1
     fi
     sudo snap install --dangerous "$SNAP_FILE"
-    sudo snap connect $SNAP_NAME:network-bind
+    sudo snap connect $SERVICE_NAME:network-bind
 }
 
 function wait_for_container_running() {
@@ -51,9 +51,9 @@ function wait_for_container_running() {
 
 function print_logs() {
     echo "==== Snap Logs ===="
-    sudo snap logs $SNAP_NAME -n 1000 || true
+    sudo snap logs $SERVICE_NAME -n 1000 || true
     echo "==== Systemd Daemon Logs ===="
-    sudo journalctl -u snap.$SNAP_NAME.daemon.service --no-pager -n 1000 || true
+    sudo journalctl -u snap.$SERVICE_NAME.daemon.service --no-pager -n 1000 || true
 }
 
 function cleanup_lxd_nodes() {
@@ -103,11 +103,11 @@ function wait_for_snapd() {
 
 function setup_lxd_cluster() {
     # First, ensure we have a snap file
-    SNAP_FILE=$(ls ${SNAP_NAME}_*.snap 2>/dev/null | head -n1 || echo "")
+    SNAP_FILE=$(ls ${SERVICE_NAME}_*.snap 2>/dev/null | head -n1 || echo "")
     if [ -z "$SNAP_FILE" ]; then
         echo "No snap file found, building one..."
         build_snap
-        SNAP_FILE=$(ls ${SNAP_NAME}_*.snap 2>/dev/null | head -n1 || echo "")
+        SNAP_FILE=$(ls ${SERVICE_NAME}_*.snap 2>/dev/null | head -n1 || echo "")
         if [ -z "$SNAP_FILE" ]; then
             echo "ERROR: Failed to build snap file"
             return 1
@@ -132,7 +132,7 @@ function setup_lxd_cluster() {
         echo "Setting up $node..."
         sudo lxc file push "$SNAP_FILE" $node/root/
         sudo lxc exec $node -- snap install --dangerous /root/"$BASENAME"
-        sudo lxc exec $node -- snap connect $SNAP_NAME:network-bind
+        sudo lxc exec $node -- snap connect $SERVICE_NAME:network-bind
         sudo lxc file push ~/actionutils.sh $node/root/actionutils.sh --mode=755
         sudo lxc file push -r ~/scripts $node/root/
         echo "$node setup complete"

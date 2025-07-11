@@ -24,14 +24,14 @@ class TestDaemonIntegration:
         """Test allocation of cores via daemon request."""
         with patch("epa_orchestrator.cpu_pinning.get_isolated_cpus", return_value="0-3,6-7"):
             request = AllocateCoresRequest(
-                snap_name="snap1", action=ActionType.ALLOCATE_CORES, cores_requested=2
+                service_name="service1", action=ActionType.ALLOCATE_CORES, cores_requested=2
             )
             isolated = get_isolated_cpus()
             shared, allocated = calculate_cpu_pinning(isolated, request.cores_requested)
-            fresh_allocations_db.allocate_cores(request.snap_name, allocated)
+            fresh_allocations_db.allocate_cores(request.service_name, allocated)
             stats = fresh_allocations_db.get_system_stats(isolated)
             response = AllocateCoresResponse(
-                snap_name=request.snap_name,
+                service_name=request.service_name,
                 cores_requested=request.cores_requested,
                 cores_allocated=len(fresh_allocations_db._parse_cpu_ranges(allocated)),
                 allocated_cores=allocated,
@@ -39,13 +39,13 @@ class TestDaemonIntegration:
                 total_available_cpus=stats["total_available_cpus"],
                 remaining_available_cpus=stats["remaining_available_cpus"],
             )
-            assert response.snap_name == "snap1"
+            assert response.service_name == "service1"
             assert response.cores_allocated == 2
 
     def test_error_handling(self):
         """Test error handling in daemon integration."""
         with pytest.raises(Exception):
-            AllocateCoresRequest(snap_name="snap1", action="bad_action", cores_requested=2)
+            AllocateCoresRequest(service_name="service1", action="bad_action", cores_requested=2)
 
     def test_allocate_cores_no_isolated_cpus(self):
         """Test error response when no isolated CPUs are configured in daemon handler."""
@@ -55,7 +55,7 @@ class TestDaemonIntegration:
         ):
             request = {
                 "version": "1.0",
-                "snap_name": "snap1",
+                "service_name": "service1",
                 "action": "allocate_cores",
                 "cores_requested": 2,
             }

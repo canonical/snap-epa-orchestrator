@@ -73,69 +73,69 @@ class AllocationsDB:
         available_cpus = self.get_available_cpus(total_cpus)
         return len(available_cpus) >= requested_count
 
-    def allocate_cores(self, snap_name: str, allocated_cores: str) -> None:
-        """Allocate cores to a snap.
+    def allocate_cores(self, service_name: str, allocated_cores: str) -> None:
+        """Allocate cores to a service.
 
         Args:
-            snap_name: Name of the snap
-            allocated_cores: Comma-separated list of CPU ranges allocated to the snap
+            service_name: Name of the service
+            allocated_cores: Comma-separated list of CPU ranges allocated to the service
         """
         if allocated_cores:
-            # Remove any existing allocation for this snap
-            if snap_name in self._allocations:
-                old_cores = self._allocations[snap_name]
+            # Remove any existing allocation for this service
+            if service_name in self._allocations:
+                old_cores = self._allocations[service_name]
                 old_cpu_set = self._parse_cpu_ranges(old_cores)
                 self._allocated_cpus -= old_cpu_set
 
             # Add new allocation
-            self._allocations[snap_name] = allocated_cores
+            self._allocations[service_name] = allocated_cores
             new_cpu_set = self._parse_cpu_ranges(allocated_cores)
             self._allocated_cpus.update(new_cpu_set)
-            logging.info(f"Allocated cores {allocated_cores} to snap {snap_name}")
+            logging.info(f"Allocated cores {allocated_cores} to service {service_name}")
         else:
-            logging.warning(f"No cores allocated to snap {snap_name}")
+            logging.warning(f"No cores allocated to service {service_name}")
 
-    def get_allocation(self, snap_name: str) -> Optional[str]:
-        """Get the allocated cores for a specific snap.
+    def get_allocation(self, service_name: str) -> Optional[str]:
+        """Get the allocated cores for a specific service.
 
         Args:
-            snap_name: Name of the snap
+            service_name: Name of the service
 
         Returns:
-            Comma-separated list of CPU ranges allocated to the snap, or None if not found
+            Comma-separated list of CPU ranges allocated to the service, or None if not found
         """
-        return self._allocations.get(snap_name)
+        return self._allocations.get(service_name)
 
     def get_all_allocations(self) -> list[SnapAllocation]:
-        """Get all snap allocations.
+        """Get all service allocations.
 
         Returns:
             List of SnapAllocation objects
         """
         return [
             SnapAllocation(
-                snap_name=snap_name,
+                service_name=service_name,
                 allocated_cores=cores,
                 cores_count=len(self._parse_cpu_ranges(cores)),
             )
-            for snap_name, cores in self._allocations.items()
+            for service_name, cores in self._allocations.items()
         ]
 
-    def remove_allocation(self, snap_name: str) -> bool:
-        """Remove allocation for a specific snap.
+    def remove_allocation(self, service_name: str) -> bool:
+        """Remove allocation for a specific service.
 
         Args:
-            snap_name: Name of the snap
+            service_name: Name of the service
 
         Returns:
             True if allocation was removed, False if not found
         """
-        if snap_name in self._allocations:
-            cores = self._allocations[snap_name]
+        if service_name in self._allocations:
+            cores = self._allocations[service_name]
             cpu_set = self._parse_cpu_ranges(cores)
             self._allocated_cpus -= cpu_set
-            del self._allocations[snap_name]
-            logging.info(f"Removed allocation for snap {snap_name}")
+            del self._allocations[service_name]
+            logging.info(f"Removed allocation for service {service_name}")
             return True
         return False
 
@@ -153,16 +153,16 @@ class AllocationsDB:
         """
         return len(self._allocated_cpus)
 
-    def get_snap_allocation_count(self, snap_name: str) -> int:
-        """Get the number of CPUs allocated to a specific snap.
+    def get_snap_allocation_count(self, service_name: str) -> int:
+        """Get the number of CPUs allocated to a specific service.
 
         Args:
-            snap_name: Name of the snap
+            service_name: Name of the service
 
         Returns:
-            Number of CPUs allocated to the snap, or 0 if not found
+            Number of CPUs allocated to the service, or 0 if not found
         """
-        allocation = self._allocations.get(snap_name)
+        allocation = self._allocations.get(service_name)
         if allocation:
             return len(self._parse_cpu_ranges(allocation))
         return 0
