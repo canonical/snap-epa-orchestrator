@@ -7,6 +7,7 @@ This repository contains the source for the EPA Orchestrator snap.
 ## Features
 
 - **CPU Pinning and Allocation**: Allocate isolated and shared CPU sets to snaps and workloads, supporting both dedicated and shared CPU usage models with basic system-size heuristics.
+- **Explicit Core Allocation**: Request specific CPU cores by their exact identifiers, with automatic conflict resolution and forced reallocation capabilities.
 - **Resource Introspection**: Query current allocations and available resources via a secure API.
 - **Secure Unix Socket API**: All orchestration actions are performed via a secure, local Unix socket with JSON-based requests and responses.
 - **Basic Allocation Heuristics**: Automatic allocation based on system size (small vs large systems) when no specific core count is requested.
@@ -23,6 +24,14 @@ When a client requests core allocation with `cores_requested: 0`, EPA Orchestrat
   - All other CPUs are allocated to the requesting snap or workload.
 
 This policy ensures that on large servers, a fixed number of CPUs are always available for system or shared use, while on smaller systems, a proportional allocation is used.
+
+### Explicit Core Allocation Policy
+
+The explicit allocation action allows services to request specific CPU cores by their exact identifiers:
+
+- **Force Reallocation**: Explicit allocation will override any existing non-explicit allocations to other services.
+- **Conflict Prevention**: Cores that are already explicitly allocated to another service will be rejected.
+- **Priority System**: Explicit allocations take precedence over automatic allocations and cannot be overridden by other services.
 
 ### Planned Features
 
@@ -91,7 +100,59 @@ Request CPU allocation for a specific service:
 }
 ```
 
-#### 2. List Allocations (`list_allocations`)
+#### 2. Explicitly Allocate Cores (`explicitly_allocate_cores`)
+
+Request specific CPU cores by their exact identifiers:
+
+```json
+{
+  "version": "1.0",
+  "service_name": "my-service",
+  "action": "explicitly_allocate_cores",
+  "cores_requested": "0-2,4,6"
+}
+```
+
+- `cores_requested`: Comma-separated list of specific CPU ranges to allocate (e.g., "0-2,4,6")
+
+#### Response Example (Success)
+
+```json
+{
+  "version": "1.0",
+  "service_name": "my-service",
+  "cores_requested": "0-2,4,6",
+  "cores_allocated": "0-2,4,6",
+  "cores_rejected": "",
+  "total_available_cpus": 20,
+  "remaining_available_cpus": 14
+}
+```
+
+#### Response Example (Partial Success with Rejections)
+
+```json
+{
+  "version": "1.0",
+  "service_name": "my-service",
+  "cores_requested": "0-2,4,6",
+  "cores_allocated": "0-2,4",
+  "cores_rejected": "6",
+  "total_available_cpus": 20,
+  "remaining_available_cpus": 17
+}
+```
+
+#### Response Example (Error)
+
+```json
+{
+  "version": "1.0",
+  "error": "Requested cores {6, 7} are not available in isolated CPUs: 0-5"
+}
+```
+
+#### 3. List Allocations (`list_allocations`)
 
 Get all current service allocations:
 
@@ -116,12 +177,14 @@ Get all current service allocations:
     {
       "service_name": "my-service",
       "allocated_cores": "0-1",
-      "cores_count": 2
+      "cores_count": 2,
+      "is_explicit": false
     },
     {
       "service_name": "another-service",
       "allocated_cores": "2-3",
-      "cores_count": 2
+      "cores_count": 2,
+      "is_explicit": true
     }
   ]
 }

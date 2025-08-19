@@ -7,15 +7,17 @@ import json
 import logging
 from typing import Union
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ValidationError
 
 from epa_orchestrator.allocations_db import allocations_db
 from epa_orchestrator.cpu_pinning import calculate_cpu_pinning, get_isolated_cpus
 from epa_orchestrator.schemas import (
+    ActionType,
     AllocateCoresRequest,
     AllocateCoresResponse,
-    EpaRequest,
     ErrorResponse,
+    ExplicitlyAllocateCoresRequest,
+    ExplicitlyAllocateCoresResponse,
     ListAllocationsRequest,
     ListAllocationsResponse,
     SnapAllocation,
@@ -79,6 +81,51 @@ def handle_allocate_cores(request: AllocateCoresRequest) -> AllocateCoresRespons
     )
 
 
+def handle_explicitly_allocate_cores(
+    request: ExplicitlyAllocateCoresRequest,
+) -> ExplicitlyAllocateCoresResponse:
+    """Handle explicit allocate cores action.
+
+    Args:
+        request: The EPA request for explicit core allocation
+
+    Returns:
+        ExplicitlyAllocateCoresResponse with allocation results
+    """
+    try:
+        isolated = get_isolated_cpus()
+    except RuntimeError as e:
+        raise ValueError("No Isolated CPUs configured") from e
+    if not isolated:
+        raise ValueError("No CPUs available")
+
+    stats = allocations_db.get_system_stats(isolated)
+
+    requested_cpu_set = allocations_db._parse_cpu_ranges(request.cores_requested)
+    isolated_cpu_set = allocations_db._parse_cpu_ranges(isolated)
+
+    invalid_cpus = requested_cpu_set - isolated_cpu_set
+    if invalid_cpus:
+        raise ValueError(
+            f"Requested cores {invalid_cpus} are not available in isolated CPUs: {isolated}"
+        )
+
+    allocated_cores, rejected_cores = allocations_db.explicitly_allocate_cores(
+        request.service_name, request.cores_requested
+    )
+
+    updated_stats = allocations_db.get_system_stats(isolated)
+
+    return ExplicitlyAllocateCoresResponse(
+        service_name=request.service_name,
+        cores_requested=request.cores_requested,
+        cores_allocated=allocated_cores,
+        cores_rejected=rejected_cores,
+        total_available_cpus=stats["total_available_cpus"],
+        remaining_available_cpus=updated_stats["remaining_available_cpus"],
+    )
+
+
 def handle_list_allocations(request: ListAllocationsRequest) -> ListAllocationsResponse:
     """Handle list allocations action.
 
@@ -113,9 +160,13 @@ def handle_list_allocations(request: ListAllocationsRequest) -> ListAllocationsR
     allocations = []
     for service_name, allocated_cores in allocations_db._allocations.items():
         cores_count = allocations_db.get_snap_allocation_count(service_name)
+        is_explicit = allocations_db.is_explicit_allocation(service_name)
         allocations.append(
             SnapAllocation(
-                service_name=service_name, allocated_cores=allocated_cores, cores_count=cores_count
+                service_name=service_name,
+                allocated_cores=allocated_cores,
+                cores_count=cores_count,
+                is_explicit=is_explicit,
             )
         )
 
@@ -139,35 +190,60 @@ def handle_daemon_request(data: bytes) -> bytes:
     """
     try:
         request_data = json.loads(data.decode())
-        request: Union[AllocateCoresRequest, ListAllocationsRequest] = TypeAdapter(
-            EpaRequest
-        ).validate_python(request_data)
-        response: Union[AllocateCoresResponse, ListAllocationsResponse, ErrorResponse]
-        if isinstance(request, AllocateCoresRequest):
-            response = handle_allocate_cores(request)
-        elif isinstance(request, ListAllocationsRequest):
-            response = handle_list_allocations(request)
+        action_value = request_data.get("action")
+
+        response: Union[
+            AllocateCoresResponse,
+            ExplicitlyAllocateCoresResponse,
+            ListAllocationsResponse,
+            ErrorResponse,
+        ]
+
+        if action_value in (
+            ActionType.ALLOCATE_CORES,
+            ActionType.ALLOCATE_CORES.value,
+            "allocate_cores",
+        ):
+            ac_req: AllocateCoresRequest = AllocateCoresRequest.parse_obj(request_data)
+            response = handle_allocate_cores(ac_req)
+        elif action_value in (
+            ActionType.EXPLICITLY_ALLOCATE_CORES,
+            ActionType.EXPLICITLY_ALLOCATE_CORES.value,
+            "explicitly_allocate_cores",
+        ):
+            ex_req: ExplicitlyAllocateCoresRequest = ExplicitlyAllocateCoresRequest.parse_obj(
+                request_data
+            )
+            response = handle_explicitly_allocate_cores(ex_req)
+        elif action_value in (
+            ActionType.LIST_ALLOCATIONS,
+            ActionType.LIST_ALLOCATIONS.value,
+            "list_allocations",
+        ):
+            la_req: ListAllocationsRequest = ListAllocationsRequest.parse_obj(request_data)
+            response = handle_list_allocations(la_req)
         else:
             response = ErrorResponse(
-                error=f"Unknown action: {getattr(request, 'action', None)}",
+                error=f"Unknown action: {action_value}",
                 version="1.0",
             )
-        return response.model_dump_json().encode()
+
+        return response.json().encode()
     except (ValidationError, json.JSONDecodeError) as e:
         error_response = ErrorResponse(
             error=str(e),
             version="1.0",
         )
-        return error_response.model_dump_json().encode()
+        return error_response.json().encode()
     except ValueError as e:
         error_response = ErrorResponse(
             error=str(e),
             version="1.0",
         )
-        return error_response.model_dump_json().encode()
+        return error_response.json().encode()
     except Exception as e:
         error_response = ErrorResponse(
             error=str(e),
             version="1.0",
         )
-        return error_response.model_dump_json().encode()
+        return error_response.json().encode()

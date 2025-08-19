@@ -14,6 +14,7 @@ class ActionType(str, Enum):
 
     ALLOCATE_CORES = "allocate_cores"
     LIST_ALLOCATIONS = "list_allocations"
+    EXPLICITLY_ALLOCATE_CORES = "explicitly_allocate_cores"
 
 
 class AllocateCoresRequest(BaseModel):
@@ -29,6 +30,17 @@ class AllocateCoresRequest(BaseModel):
     )
 
 
+class ExplicitlyAllocateCoresRequest(BaseModel):
+    """Request model for explicitly allocating specific cores."""
+
+    version: Literal["1.0"] = Field(default=API_VERSION)
+    action: Literal[ActionType.EXPLICITLY_ALLOCATE_CORES]
+    service_name: str = Field(description="Name of the requesting service")
+    cores_requested: str = Field(
+        description="Comma-separated list of specific CPU ranges to allocate (e.g., '0-2,4,6')"
+    )
+
+
 class ListAllocationsRequest(BaseModel):
     """Request model for listing allocations."""
 
@@ -38,7 +50,7 @@ class ListAllocationsRequest(BaseModel):
 
 
 EpaRequest = Annotated[
-    Union[AllocateCoresRequest, ListAllocationsRequest],
+    Union[AllocateCoresRequest, ExplicitlyAllocateCoresRequest, ListAllocationsRequest],
     Field(discriminator="action"),
 ]
 
@@ -58,12 +70,32 @@ class AllocateCoresResponse(BaseModel):
     )
 
 
+class ExplicitlyAllocateCoresResponse(BaseModel):
+    """Pydantic model for explicit allocate cores response."""
+
+    version: Literal["1.0"] = Field(default=API_VERSION)
+    service_name: str = Field(description="Name of the service that was allocated cores")
+    cores_requested: str = Field(description="Specific cores that were requested")
+    cores_allocated: str = Field(description="Cores that were actually allocated")
+    cores_rejected: str = Field(
+        default="",
+        description="Cores that were rejected due to explicit allocation to another service",
+    )
+    total_available_cpus: int = Field(description="Total number of CPUs available in the system")
+    remaining_available_cpus: int = Field(
+        description="Number of CPUs still available for allocation"
+    )
+
+
 class SnapAllocation(BaseModel):
     """Model for service allocation information."""
 
     service_name: str = Field(description="Name of the service")
     allocated_cores: str = Field(description="Comma-separated list of allocated CPU ranges")
     cores_count: int = Field(description="Number of cores allocated to this service")
+    is_explicit: bool = Field(
+        default=False, description="Whether this allocation was made explicitly"
+    )
 
 
 class ListAllocationsResponse(BaseModel):

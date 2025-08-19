@@ -3,6 +3,7 @@
 
 """Concise integration test for socket communication with the daemon functionality."""
 
+import json
 import os
 import socket
 import threading
@@ -11,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from pydantic import parse_obj_as
 
 from epa_orchestrator.daemon_handler import handle_daemon_request
 from epa_orchestrator.schemas import (
@@ -18,6 +20,8 @@ from epa_orchestrator.schemas import (
     AllocateCoresRequest,
     AllocateCoresResponse,
     ErrorResponse,
+    ExplicitlyAllocateCoresRequest,
+    ExplicitlyAllocateCoresResponse,
     ListAllocationsRequest,
     ListAllocationsResponse,
 )
@@ -106,12 +110,135 @@ class TestSocketCommunication:
 
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.connect(socket_path)
-            client.sendall(request.model_dump_json().encode())
+            client.sendall(request.json().encode())
             response_data = client.recv(4096)
 
-        response = AllocateCoresResponse.model_validate_json(response_data.decode())
+        response = parse_obj_as(AllocateCoresResponse, json.loads(response_data.decode()))
         assert response.service_name == "service1"
         assert response.cores_allocated == 1
+
+    @pytest.mark.parametrize(
+        "socket_daemon",
+        [patch_isolated_cpus_valid],
+        indirect=True,
+    )
+    def test_explicitly_allocate_cores_via_socket(self, socket_daemon, socket_path):
+        """Test explicit allocation of cores through socket communication."""
+        request = ExplicitlyAllocateCoresRequest(
+            service_name="service1",
+            action=ActionType.EXPLICITLY_ALLOCATE_CORES,
+            cores_requested="0-2",
+        )
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+            client.sendall(request.json().encode())
+            response_data = client.recv(4096)
+
+        response = parse_obj_as(
+            ExplicitlyAllocateCoresResponse, json.loads(response_data.decode())
+        )
+        assert response.service_name == "service1"
+        assert response.cores_allocated == "0-2"
+        assert response.cores_rejected == ""
+
+    @pytest.mark.parametrize(
+        "socket_daemon",
+        [patch_isolated_cpus_valid],
+        indirect=True,
+    )
+    def test_explicit_allocation_conflict_resolution(self, socket_daemon, socket_path):
+        """Test conflict resolution when multiple services request overlapping cores explicitly."""
+        request1 = ExplicitlyAllocateCoresRequest(
+            service_name="service1",
+            action=ActionType.EXPLICITLY_ALLOCATE_CORES,
+            cores_requested="0-2",
+        )
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client1:
+            client1.connect(socket_path)
+            client1.sendall(request1.json().encode())
+            response1_data = client1.recv(4096)
+
+        response1 = parse_obj_as(
+            ExplicitlyAllocateCoresResponse, json.loads(response1_data.decode())
+        )
+        assert response1.cores_allocated == "0-2"
+        assert response1.cores_rejected == ""
+
+        request2 = ExplicitlyAllocateCoresRequest(
+            service_name="service2",
+            action=ActionType.EXPLICITLY_ALLOCATE_CORES,
+            cores_requested="1-4",
+        )
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client2:
+            client2.connect(socket_path)
+            client2.sendall(request2.json().encode())
+            response2_data = client2.recv(4096)
+
+        response2 = parse_obj_as(
+            ExplicitlyAllocateCoresResponse, json.loads(response2_data.decode())
+        )
+        assert response2.cores_allocated == "3-4"
+        assert response2.cores_rejected == "1-2"
+
+    @pytest.mark.parametrize(
+        "socket_daemon",
+        [patch_isolated_cpus_valid],
+        indirect=True,
+    )
+    def test_explicit_allocation_force_reallocation(self, socket_daemon, socket_path):
+        """Test that explicit allocation can force reallocate regular allocations."""
+        request1 = AllocateCoresRequest(
+            service_name="service1", action=ActionType.ALLOCATE_CORES, cores_requested=2
+        )
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client1:
+            client1.connect(socket_path)
+            client1.sendall(request1.json().encode())
+            response1_data = client1.recv(4096)
+
+        response1 = parse_obj_as(AllocateCoresResponse, json.loads(response1_data.decode()))
+        assert response1.cores_allocated == 2
+
+        request2 = ExplicitlyAllocateCoresRequest(
+            service_name="service2",
+            action=ActionType.EXPLICITLY_ALLOCATE_CORES,
+            cores_requested="1-3",
+        )
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client2:
+            client2.connect(socket_path)
+            client2.sendall(request2.json().encode())
+            response2_data = client2.recv(4096)
+
+        response2 = parse_obj_as(
+            ExplicitlyAllocateCoresResponse, json.loads(response2_data.decode())
+        )
+        assert response2.cores_allocated == "1-3"
+        assert response2.cores_rejected == ""
+
+    @pytest.mark.parametrize(
+        "socket_daemon",
+        [patch_isolated_cpus_valid],
+        indirect=True,
+    )
+    def test_explicit_allocation_invalid_cpus(self, socket_daemon, socket_path):
+        """Test error response when requesting invalid CPU cores."""
+        request = ExplicitlyAllocateCoresRequest(
+            service_name="service1",
+            action=ActionType.EXPLICITLY_ALLOCATE_CORES,
+            cores_requested="0-2,8-9",
+        )
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+            client.sendall(request.json().encode())
+            response_data = client.recv(4096)
+
+        response = parse_obj_as(ErrorResponse, json.loads(response_data.decode()))
+        assert "Requested cores {8, 9} are not available" in response.error
 
     @pytest.mark.parametrize(
         "socket_daemon",
@@ -126,10 +253,10 @@ class TestSocketCommunication:
 
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.connect(socket_path)
-            client.sendall(request.model_dump_json().encode())
+            client.sendall(request.json().encode())
             response_data = client.recv(4096)
 
-        response = ListAllocationsResponse.model_validate_json(response_data.decode())
+        response = parse_obj_as(ListAllocationsResponse, json.loads(response_data.decode()))
         assert response.total_allocations >= 0
         assert response.total_allocated_cpus >= 0
         assert response.total_available_cpus > 0
@@ -153,32 +280,29 @@ class TestSocketCommunication:
             service_name="service3", action=ActionType.ALLOCATE_CORES, cores_requested=1000
         )
 
-        # Send first request
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client1:
             client1.connect(socket_path)
-            client1.sendall(req1.model_dump_json().encode())
+            client1.sendall(req1.json().encode())
             resp1_data = client1.recv(4096)
 
-        # Send second request
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client2:
             client2.connect(socket_path)
-            client2.sendall(req2.model_dump_json().encode())
+            client2.sendall(req2.json().encode())
             resp2_data = client2.recv(4096)
 
-        # Send third request
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client3:
             client3.connect(socket_path)
-            client3.sendall(req3.model_dump_json().encode())
+            client3.sendall(req3.json().encode())
             resp3_data = client3.recv(4096)
 
         # Verify first two succeeded
-        resp1 = AllocateCoresResponse.model_validate_json(resp1_data.decode())
-        resp2 = AllocateCoresResponse.model_validate_json(resp2_data.decode())
+        resp1 = parse_obj_as(AllocateCoresResponse, json.loads(resp1_data.decode()))
+        resp2 = parse_obj_as(AllocateCoresResponse, json.loads(resp2_data.decode()))
         assert resp1.cores_allocated == 4
         assert resp2.cores_allocated == 4
 
         # Verify third failed
-        resp3 = ErrorResponse.model_validate_json(resp3_data.decode())
+        resp3 = parse_obj_as(ErrorResponse, json.loads(resp3_data.decode()))
         assert "Insufficient CPUs available" in resp3.error
 
     @pytest.mark.parametrize(
@@ -194,8 +318,29 @@ class TestSocketCommunication:
 
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.connect(socket_path)
-            client.sendall(req.model_dump_json().encode())
+            client.sendall(req.json().encode())
             resp_data = client.recv(4096)
 
-        resp = ErrorResponse.model_validate_json(resp_data.decode())
+        resp = parse_obj_as(ErrorResponse, json.loads(resp_data.decode()))
+        assert resp.error == "No Isolated CPUs configured"
+
+    @pytest.mark.parametrize(
+        "socket_daemon",
+        [patch_isolated_cpus_error],
+        indirect=True,
+    )
+    def test_explicit_allocation_no_isolated_cpus(self, socket_daemon, socket_path):
+        """Test error response when no isolated CPUs are configured for explicit allocation."""
+        req = ExplicitlyAllocateCoresRequest(
+            service_name="service1",
+            action=ActionType.EXPLICITLY_ALLOCATE_CORES,
+            cores_requested="0-2",
+        )
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+            client.sendall(req.json().encode())
+            resp_data = client.recv(4096)
+
+        resp = parse_obj_as(ErrorResponse, json.loads(resp_data.decode()))
         assert resp.error == "No Isolated CPUs configured"
