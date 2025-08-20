@@ -5,9 +5,13 @@
 
 import logging
 import os
+import re
 from typing import Dict, List, Optional, TypedDict
 
+from epa_orchestrator.hugepages_db import list_allocations_for_node
+
 NODES_BASE_PATH = "/sys/devices/system/node"
+_HUGEPAGES_DIR_RE = re.compile(r"^hugepages-(\d+)kB$")
 
 
 class HugepageStats(TypedDict):
@@ -63,28 +67,25 @@ def _get_node_hugepage_sizes(hugepages_dir: str) -> Dict[str, HugepageStats]:
     sizes: Dict[str, HugepageStats] = {}
     try:
         for entry in os.listdir(hugepages_dir):
-            if not entry.startswith("hugepages-") or not entry.endswith("kB"):
+            match = _HUGEPAGES_DIR_RE.match(entry)
+            if not match:
                 continue
-            try:
-                start_idx = len("hugepages-")
-                size_kb = int(entry[start_idx:-2])
-                size_key = str(size_kb)
-            except ValueError:
-                continue
+            size_key = match.group(1)
 
             entry_path = os.path.join(hugepages_dir, entry)
             result = _process_hugepage_entry(entry_path)
             if result:
                 sizes[size_key] = result
-    except Exception:
-        pass
+    except Exception as e:
+        logging.error(
+            f"Unexpected error while reading hugepages directory {hugepages_dir}: {e}",
+            exc_info=True,
+        )
     return sizes
 
 
 def _get_node_allocations(node_id: int) -> Dict[str, Dict[str, int]]:
     """Get allocations for a specific node."""
-    from epa_orchestrator.hugepages_db import list_allocations_for_node
-
     allocations_list = list_allocations_for_node(node_id)
     allocations: Dict[str, Dict[str, int]] = {}
     for item in allocations_list:
@@ -113,7 +114,7 @@ def get_numa_hugepages_info() -> Dict[str, Dict[str, object]]:
         hugepages_dir = os.path.join(NODES_BASE_PATH, node_dir, "hugepages")
 
         if not os.path.exists(hugepages_dir):
-            nodes[node_key] = {"usage": [], "allocations": {}}
+            nodes[node_key] = {"capacity": [], "allocations": {}}
             continue
 
         sizes = _get_node_hugepage_sizes(hugepages_dir)
@@ -130,14 +131,16 @@ def get_numa_hugepages_info() -> Dict[str, Dict[str, object]]:
                 continue
             total = int(stats.get("total", 0))
             free_raw = int(stats.get("free", 0))
-            free_adj = max(free_raw - tracked, 0)
-            used_adj = max(min(total - free_adj, total), 0)
+            used_raw = int(stats.get("used", 0))
+            to_overlay = max(tracked - used_raw, 0)
+            free_adj = max(free_raw - to_overlay, 0)
+            used_adj = min(used_raw + (free_raw - free_adj), total)
             stats["free"] = free_adj
             stats["used"] = used_adj
 
-        usage = []
+        capacity = []
         for size_key, stats in sizes.items():
-            usage.append(
+            capacity.append(
                 {
                     "total": int(stats.get("total", 0)),
                     "free": int(stats.get("free", 0)),
@@ -145,7 +148,7 @@ def get_numa_hugepages_info() -> Dict[str, Dict[str, object]]:
                 }
             )
 
-        nodes[node_key] = {"usage": usage, "allocations": allocations}
+        nodes[node_key] = {"capacity": capacity, "allocations": allocations}
 
     return nodes
 

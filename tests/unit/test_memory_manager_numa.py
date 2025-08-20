@@ -33,7 +33,7 @@ def test_numa_info_structured(tmp_path):
         info = get_numa_hugepages_info()
         assert set(info.keys()) == {"node0", "node1"}
         node0 = info["node0"]
-        entry_2m = [u for u in node0["usage"] if u["size"] == 2048][0]
+        entry_2m = [u for u in node0["capacity"] if u["size"] == 2048][0]
         assert entry_2m["total"] == 100
         assert entry_2m["free"] == 60
         assert node0["allocations"] == {}
@@ -45,4 +45,4 @@ def test_numa_info_empty_nodes(tmp_path):
         os.makedirs(str(tmp_path), exist_ok=True)
         os.makedirs(os.path.join(str(tmp_path), "node0"), exist_ok=True)
         info = get_numa_hugepages_info()
-        assert info == {"node0": {"usage": [], "allocations": {}}}
+        assert info == {"node0": {"capacity": [], "allocations": {}}}

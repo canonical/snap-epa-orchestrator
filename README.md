@@ -143,7 +143,7 @@ Get all current service allocations:
 
 #### 3. Get Memory Info (`get_memory_info`)
 
-Get NUMA hugepage information (with EPA-tracked overlay), keyed by node name with usage lists:
+Get NUMA hugepage information (with EPA-tracked overlay), keyed by node name with capacity lists:
 
 ```json
 {
@@ -161,7 +161,7 @@ Get NUMA hugepage information (with EPA-tracked overlay), keyed by node name wit
   "service_name": "my-service",
   "numa_hugepages": {
     "node0": {
-      "usage": [
+      "capacity": [
         { "total": 100, "free": 60, "size": 2048 },
         { "total": 4, "free": 1, "size": 1048576 }
       ],

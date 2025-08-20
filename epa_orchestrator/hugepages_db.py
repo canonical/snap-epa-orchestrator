@@ -6,6 +6,12 @@
 import logging
 from typing import Dict, List, Optional, Union
 
+from epa_orchestrator.schemas import (
+    HugepageAllocationEntry,
+    NodeHugepageAllocation,
+    ServiceHugepageAllocations,
+)
+
 # Structure: service_name -> list of allocations
 # allocation: {"node_id": int, "size_kb": int, "count": int}
 _allocations: Dict[str, List[Dict[str, int]]] = {}
@@ -26,6 +32,24 @@ def list_allocations() -> Dict[str, List[Dict[str, int]]]:
     return {k: list(v) for k, v in _allocations.items()}
 
 
+def list_allocations_typed() -> Dict[str, ServiceHugepageAllocations]:
+    """Return all hugepage allocation records by service."""
+    result: Dict[str, ServiceHugepageAllocations] = {}
+    for service, entries in _allocations.items():
+        typed_entries = [
+            HugepageAllocationEntry(
+                node_id=int(e.get("node_id", 0)),
+                size_kb=int(e.get("size_kb", 0)),
+                count=int(e.get("count", 0)),
+            )
+            for e in entries
+        ]
+        result[service] = ServiceHugepageAllocations(
+            service_name=service, allocations=typed_entries
+        )
+    return result
+
+
 def list_allocations_for_node(node_id: int) -> List[Dict[str, Union[str, int]]]:
     """Return flattened list of allocations for a specific node."""
     results: List[Dict[str, Union[str, int]]] = []
@@ -38,6 +62,22 @@ def list_allocations_for_node(node_id: int) -> List[Dict[str, Union[str, int]]]:
                         "size_kb": entry.get("size_kb", 0),
                         "count": entry.get("count", 0),
                     }
+                )
+    return results
+
+
+def list_allocations_for_node_typed(node_id: int) -> List[NodeHugepageAllocation]:
+    """Return flattened list of allocations for a specific node."""
+    results: List[NodeHugepageAllocation] = []
+    for service, entries in _allocations.items():
+        for entry in entries:
+            if entry.get("node_id") == node_id:
+                results.append(
+                    NodeHugepageAllocation(
+                        service_name=service,
+                        size_kb=int(entry.get("size_kb", 0)),
+                        count=int(entry.get("count", 0)),
+                    )
                 )
     return results
 

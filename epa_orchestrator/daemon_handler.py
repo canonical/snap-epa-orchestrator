@@ -135,10 +135,16 @@ def handle_list_allocations(request: ListAllocationsRequest) -> ListAllocationsR
     )
 
 
-def handle_get_memory_info(request: GetMemoryInfoRequest) -> MemoryInfoResponse:
+def handle_get_memory_info(
+    request: GetMemoryInfoRequest,
+) -> Union[MemoryInfoResponse, ErrorResponse]:
     """Handle get memory info action."""
     try:
         memory_summary = get_memory_summary()
+        if "error" in memory_summary:
+            err = str(memory_summary.get("error", "Unknown error"))
+            logging.error(f"Failed to get memory information: {err}")
+            return ErrorResponse(error=f"Failed to get memory information: {err}")
         numa_map = cast(Dict[str, NodeHugepagesInfo], memory_summary.get("numa_hugepages", {}))
         return MemoryInfoResponse(
             service_name=request.service_name,
@@ -146,10 +152,7 @@ def handle_get_memory_info(request: GetMemoryInfoRequest) -> MemoryInfoResponse:
         )
     except Exception as e:
         logging.error(f"Failed to get memory information: {e}")
-        return MemoryInfoResponse(
-            service_name=request.service_name,
-            numa_hugepages={},
-        )
+        return ErrorResponse(error=f"Failed to get memory information: {e}")
 
 
 def handle_allocate_hugepages(request: AllocateHugepagesRequest) -> AllocateHugepagesResponse:

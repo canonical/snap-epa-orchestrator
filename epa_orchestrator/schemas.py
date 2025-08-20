@@ -116,6 +116,29 @@ class ListAllocationsResponse(BaseModel):
     allocations: List[SnapAllocation] = Field(description="List of all service allocations")
 
 
+class HugepageAllocationEntry(BaseModel):
+    """Single hugepage allocation entry for a service."""
+
+    node_id: int
+    size_kb: int
+    count: int
+
+
+class ServiceHugepageAllocations(BaseModel):
+    """All hugepage allocations for a single service."""
+
+    service_name: str
+    allocations: List[HugepageAllocationEntry]
+
+
+class NodeHugepageAllocation(BaseModel):
+    """Flattened entry for allocations on a specific node."""
+
+    service_name: str
+    size_kb: int
+    count: int
+
+
 class UsageEntry(BaseModel):
     """Usage entry for a specific hugepage size on a node."""
 
@@ -125,9 +148,9 @@ class UsageEntry(BaseModel):
 
 
 class NodeHugepagesInfo(BaseModel):
-    """Per-node hugepages info with usage list and allocations."""
+    """Per-node hugepages info with capacity list and allocations."""
 
-    usage: List[UsageEntry]
+    capacity: List[UsageEntry]
     allocations: Dict[str, Dict[str, int]]
 
 
