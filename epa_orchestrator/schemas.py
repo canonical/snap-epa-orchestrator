@@ -15,6 +15,7 @@ class ActionType(str, Enum):
     ALLOCATE_CORES = "allocate_cores"
     LIST_ALLOCATIONS = "list_allocations"
     EXPLICITLY_ALLOCATE_CORES = "explicitly_allocate_cores"
+    EXPLICITLY_ALLOCATE_NUMA_CORES = "explicitly_allocate_numa_cores"
 
 
 class AllocateCoresRequest(BaseModel):
@@ -49,8 +50,29 @@ class ListAllocationsRequest(BaseModel):
     service_name: str = Field(description="Name of the requesting service")
 
 
+class ExplicitlyAllocateNumaCoresRequest(BaseModel):
+    """Request model for explicitly allocating cores from a specific NUMA node.
+
+    Note: setting num_of_cores to 0 will deallocate any existing cores for this
+    service in the specified NUMA node.
+    """
+
+    version: Literal["1.0"] = Field(default=API_VERSION)
+    action: Literal[ActionType.EXPLICITLY_ALLOCATE_NUMA_CORES]
+    service_name: str = Field(description="Name of the requesting service")
+    numa_node: int = Field(ge=0, description="NUMA node to allocate cores from")
+    num_of_cores: int = Field(
+        ge=0, description="Number of cores to allocate from the NUMA node (0 to deallocate)"
+    )
+
+
 EpaRequest = Annotated[
-    Union[AllocateCoresRequest, ExplicitlyAllocateCoresRequest, ListAllocationsRequest],
+    Union[
+        AllocateCoresRequest,
+        ExplicitlyAllocateCoresRequest,
+        ExplicitlyAllocateNumaCoresRequest,
+        ListAllocationsRequest,
+    ],
     Field(discriminator="action"),
 ]
 
@@ -77,10 +99,20 @@ class ExplicitlyAllocateCoresResponse(BaseModel):
     service_name: str = Field(description="Name of the service that was allocated cores")
     cores_requested: str = Field(description="Specific cores that were requested")
     cores_allocated: str = Field(description="Cores that were actually allocated")
-    cores_rejected: str = Field(
-        default="",
-        description="Cores that were rejected due to explicit allocation to another service",
+    total_available_cpus: int = Field(description="Total number of CPUs available in the system")
+    remaining_available_cpus: int = Field(
+        description="Number of CPUs still available for allocation"
     )
+
+
+class ExplicitlyAllocateNumaCoresResponse(BaseModel):
+    """Pydantic model for explicit NUMA allocate cores response."""
+
+    version: Literal["1.0"] = Field(default=API_VERSION)
+    service_name: str = Field(description="Name of the service that was allocated cores")
+    numa_node: int = Field(description="NUMA node cores were allocated from")
+    num_of_cores: int = Field(description="Number of cores that were requested")
+    cores_allocated: str = Field(description="Cores that were actually allocated")
     total_available_cpus: int = Field(description="Total number of CPUs available in the system")
     remaining_available_cpus: int = Field(
         description="Number of CPUs still available for allocation"

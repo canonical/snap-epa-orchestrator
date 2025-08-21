@@ -140,7 +140,7 @@ class TestSocketCommunication:
         )
         assert response.service_name == "service1"
         assert response.cores_allocated == "0-2"
-        assert response.cores_rejected == ""
+        assert response.total_available_cpus == 8
 
     @pytest.mark.parametrize(
         "socket_daemon",
@@ -163,13 +163,13 @@ class TestSocketCommunication:
         response1 = parse_obj_as(
             ExplicitlyAllocateCoresResponse, json.loads(response1_data.decode())
         )
+        assert response1.service_name == "service1"
         assert response1.cores_allocated == "0-2"
-        assert response1.cores_rejected == ""
 
         request2 = ExplicitlyAllocateCoresRequest(
             service_name="service2",
             action=ActionType.EXPLICITLY_ALLOCATE_CORES,
-            cores_requested="1-4",
+            cores_requested="1-2",
         )
 
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client2:
@@ -177,11 +177,8 @@ class TestSocketCommunication:
             client2.sendall(request2.json().encode())
             response2_data = client2.recv(4096)
 
-        response2 = parse_obj_as(
-            ExplicitlyAllocateCoresResponse, json.loads(response2_data.decode())
-        )
-        assert response2.cores_allocated == "3-4"
-        assert response2.cores_rejected == "1-2"
+        err2 = parse_obj_as(ErrorResponse, json.loads(response2_data.decode()))
+        assert "Failed to allocate requested explicit cores" in err2.error
 
     @pytest.mark.parametrize(
         "socket_daemon",
@@ -216,8 +213,8 @@ class TestSocketCommunication:
         response2 = parse_obj_as(
             ExplicitlyAllocateCoresResponse, json.loads(response2_data.decode())
         )
+        assert response2.service_name == "service2"
         assert response2.cores_allocated == "1-3"
-        assert response2.cores_rejected == ""
 
     @pytest.mark.parametrize(
         "socket_daemon",

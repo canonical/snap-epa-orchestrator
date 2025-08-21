@@ -51,14 +51,16 @@ class TestAllocationsDB:
         assert rejected1 == ""
 
         allocated2, rejected2 = fresh_allocations_db.explicitly_allocate_cores("snap2", "1-3")
-        assert allocated2 == "3"
+        assert allocated2 == ""
         assert rejected2 == "1-2"
 
         assert fresh_allocations_db.get_allocation("snap1") == "0-2"
         assert fresh_allocations_db.is_explicit_allocation("snap1") is True
 
-        assert fresh_allocations_db.get_allocation("snap2") == "3"
-        assert fresh_allocations_db.is_explicit_allocation("snap2") is True
+        assert (
+            fresh_allocations_db.get_allocation("snap2") is None
+        )  # No allocation due to rejection
+        assert fresh_allocations_db.is_explicit_allocation("snap2") is False
 
     def test_explicit_allocation_force_reallocation(self, fresh_allocations_db):
         """Test that explicit allocation can force reallocate non-explicit allocations."""

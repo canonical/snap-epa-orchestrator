@@ -22,6 +22,7 @@ from epa_orchestrator.schemas import (
     ExplicitlyAllocateCoresRequest,
     ExplicitlyAllocateCoresResponse,
 )
+from epa_orchestrator.utils import parse_cpu_ranges
 
 
 class TestDaemonIntegration:
@@ -38,9 +39,10 @@ class TestDaemonIntegration:
             fresh_allocations_db.allocate_cores(request.service_name, allocated)
             stats = fresh_allocations_db.get_system_stats(isolated)
             response = AllocateCoresResponse(
-                service_name=request.service_name,
+                version="1.0",
+                service_name="service1",
                 cores_requested=request.cores_requested,
-                cores_allocated=len(fresh_allocations_db._parse_cpu_ranges(allocated)),
+                cores_allocated=len(parse_cpu_ranges(allocated)),
                 allocated_cores=allocated,
                 shared_cpus=shared,
                 total_available_cpus=stats["total_available_cpus"],
@@ -60,8 +62,8 @@ class TestDaemonIntegration:
             response = handle_explicitly_allocate_cores(request)
             assert response.service_name == "service1"
             assert response.cores_allocated == "0-2"
-            assert response.cores_rejected == ""
             assert response.total_available_cpus == 6
+            assert response.remaining_available_cpus == 3
 
     def test_explicitly_allocate_cores_invalid_cpus(self, fresh_allocations_db, mock_cpu_files):
         """Test explicit allocation with invalid CPU cores."""
@@ -84,16 +86,15 @@ class TestDaemonIntegration:
             )
             response1 = handle_explicitly_allocate_cores(request1)
             assert response1.cores_allocated == "0-2"
-            assert response1.cores_rejected == ""
 
             request2 = ExplicitlyAllocateCoresRequest(
                 service_name="service2",
                 action=ActionType.EXPLICITLY_ALLOCATE_CORES,
-                cores_requested="1-3",
+                cores_requested="1-2",
             )
-            response2 = handle_explicitly_allocate_cores(request2)
-            assert response2.cores_allocated == "3"
-            assert response2.cores_rejected == "1-2"
+
+            with pytest.raises(ValueError, match="Failed to allocate requested explicit cores"):
+                handle_explicitly_allocate_cores(request2)
 
     def test_error_handling(self):
         """Test error handling in daemon integration."""
@@ -147,4 +148,3 @@ class TestDaemonIntegration:
             )
             assert response.service_name == "service1"
             assert response.cores_allocated == "0-2"
-            assert response.cores_rejected == ""

@@ -7,7 +7,7 @@ import logging
 from typing import Dict, Optional, Set, Tuple
 
 from .schemas import SnapAllocation
-from .utils import to_ranges
+from .utils import parse_cpu_ranges, to_ranges
 
 
 class AllocationsDB:
@@ -22,33 +22,8 @@ class AllocationsDB:
         logging.info("Allocations database initialized")
 
     def _parse_cpu_ranges(self, cpu_ranges: str) -> set[int]:
-        """Parse CPU ranges string into a set of CPU numbers.
-
-        Args:
-            cpu_ranges: Comma-separated list of CPU ranges (e.g., "0-2,4,6-8")
-
-        Returns:
-            Set of CPU numbers
-
-        Raises:
-            ValueError: If CPU ranges are invalid (e.g., reverse ranges like "3-1")
-        """
-        if not cpu_ranges.strip():
-            return set()
-
-        cpus: set[int] = set()
-        for part in cpu_ranges.split(","):
-            part = part.strip()
-            if not part:
-                continue
-            if "-" in part:
-                start, end = map(int, part.split("-"))
-                if start > end:
-                    raise ValueError(f"Invalid CPU range: {part} (start > end)")
-                cpus.update(range(start, end + 1))
-            else:
-                cpus.add(int(part))
-        return cpus
+        """Parse CPU range string into a set of CPU numbers."""
+        return set(parse_cpu_ranges(cpu_ranges))
 
     def _remove_service_allocation(self, service_name: str) -> set[int]:
         """Remove any allocation for a service and return removed CPU set."""
@@ -143,17 +118,7 @@ class AllocationsDB:
     def explicitly_allocate_cores(
         self, service_name: str, requested_cores: str
     ) -> Tuple[str, str]:
-        """Explicitly allocate specific cores to a service, overriding existing allocations.
-
-        Args:
-            service_name: Name of the requesting service
-            requested_cores: Comma-separated list of specific CPU ranges to allocate
-
-        Returns:
-            Tuple of (allocated_cores, rejected_cores) where each is a comma-separated
-            list of CPU ranges. Rejected cores are those already explicitly allocated
-            to another service.
-        """
+        """Explicitly allocate specific cores to a service."""
         if not requested_cores.strip():
             return "", ""
 
@@ -164,22 +129,164 @@ class AllocationsDB:
         own_explicit_set = self._parse_cpu_ranges(self._explicit_allocations.get(service_name, ""))
         other_explicit_cpus = self._explicitly_allocated_cpus - own_explicit_set
         rejected_cpus = requested_cpu_set & other_explicit_cpus
-        allocatable_cpus = requested_cpu_set - rejected_cpus
 
-        if allocatable_cpus:
-            self._remove_service_allocation(service_name)
-            for existing_service in list(self._allocations.keys()):
-                if existing_service == service_name:
-                    continue
-                self._subtract_cpus_from_service(existing_service, allocatable_cpus)
-            self._apply_allocation(service_name, allocatable_cpus, explicit=True)
+        if rejected_cpus:
+            return "", to_ranges(sorted(rejected_cpus))
+
+        for existing_service in list(self._allocations.keys()):
+            if existing_service == service_name:
+                continue
+            self._subtract_cpus_from_service(existing_service, requested_cpu_set)
+
+        self._remove_service_allocation(service_name)
+        self._apply_allocation(service_name, requested_cpu_set, explicit=True)
+        logging.info(
+            f"Explicitly allocated cores {to_ranges(sorted(requested_cpu_set))} to service {service_name}"
+        )
+
+        allocated_cores_str = to_ranges(sorted(requested_cpu_set))
+        return allocated_cores_str, ""
+
+    def _get_allocatable_numa_cpus(
+        self, service_name: str, numa_node: int, isolated_cpus_str: str
+    ) -> Tuple[Set[int], Set[int]]:
+        """Get allocatable and rejected CPUs for NUMA allocation.
+
+        Args:
+            service_name: Name of the service requesting cores
+            numa_node: NUMA node to allocate cores from
+            isolated_cpus_str: String of isolated CPUs
+
+        Returns:
+            Tuple of (allocatable_cpus, rejected_cpus)
+        """
+        from .utils import get_cpus_in_numa_node
+
+        numa_cpus = get_cpus_in_numa_node(numa_node, isolated_cpus_str)
+        if not numa_cpus:
+            return set(), set()
+
+        rejected_cpus = set()
+        allocatable_cpus = set()
+
+        for cpu in numa_cpus:
+            if cpu in self._explicitly_allocated_cpus:
+                for other_service, other_cores in self._explicit_allocations.items():
+                    if other_service != service_name:
+                        other_cpu_set = self._parse_cpu_ranges(other_cores)
+                        if cpu in other_cpu_set:
+                            rejected_cpus.add(cpu)
+                            break
+                else:
+                    allocatable_cpus.add(cpu)
+            else:
+                allocatable_cpus.add(cpu)
+
+        return allocatable_cpus, rejected_cpus
+
+    def _get_service_allocation_set(self, service_name: str) -> set[int]:
+        """Return current allocation set for a service (empty if none)."""
+        if service_name not in self._allocations:
+            return set()
+        return self._parse_cpu_ranges(self._allocations[service_name])
+
+    def _get_service_explicit_set(self, service_name: str) -> set[int]:
+        """Return current explicit allocation set for a service (empty if none)."""
+        if service_name not in self._explicit_allocations:
+            return set()
+        return self._parse_cpu_ranges(self._explicit_allocations[service_name])
+
+    def _apply_numa_explicit_allocation(
+        self,
+        service_name: str,
+        numa_node: int,
+        new_cores_in_node: Set[int],
+    ) -> None:
+        """Apply explicit allocation for a specific NUMA node.
+
+        This overrides prior cores for this service within the same NUMA node,
+        and appends allocations from other NUMA nodes.
+        """
+        from .utils import get_cpus_in_numa_node
+
+        current_allocation_set = self._get_service_allocation_set(service_name)
+        current_allocation_str = to_ranges(sorted(current_allocation_set))
+        existing_in_node = get_cpus_in_numa_node(numa_node, current_allocation_str)
+        if existing_in_node:
+            self._subtract_cpus_from_service(service_name, set(existing_in_node))
+
+        remaining_allocation = self._get_service_allocation_set(service_name)
+
+        for other_service, other_cores_str in list(self._allocations.items()):
+            if other_service == service_name:
+                continue
+            other_set = self._parse_cpu_ranges(other_cores_str)
+            overlap = other_set & new_cores_in_node
+            if overlap:
+                self._subtract_cpus_from_service(other_service, overlap)
+
+        updated_allocation = remaining_allocation | new_cores_in_node
+        self._allocations[service_name] = to_ranges(sorted(updated_allocation))
+        self._allocated_cpus.update(new_cores_in_node)
+
+        remaining_explicit = self._get_service_explicit_set(service_name)
+        updated_explicit = remaining_explicit | new_cores_in_node
+        self._explicit_allocations[service_name] = to_ranges(sorted(updated_explicit))
+        self._explicitly_allocated_cpus.update(new_cores_in_node)
+
+    def explicitly_allocate_numa_cores(
+        self, service_name: str, numa_node: int, num_of_cores: int
+    ) -> Tuple[str, str]:
+        """Explicitly allocate a specific number of cores from a NUMA node."""
+        from .cpu_pinning import get_isolated_cpus
+        from .utils import get_cpus_in_numa_node, to_ranges
+
+        isolated_cpus = get_isolated_cpus()
+
+        if num_of_cores == 0:
+            prev_alloc_str = self._allocations.get(service_name, "")
+            in_node = get_cpus_in_numa_node(numa_node, prev_alloc_str)
+            if in_node:
+                self._subtract_cpus_from_service(service_name, set(in_node))
+            prev_explicit_str = self._explicit_allocations.get(service_name, "")
+            in_node_explicit = get_cpus_in_numa_node(numa_node, prev_explicit_str)
+            if in_node_explicit:
+                self._subtract_cpus_from_service(service_name, set(in_node_explicit))
+            return "", ""
+
+        allocatable_cpus, rejected_cpus = self._get_allocatable_numa_cpus(
+            service_name, numa_node, isolated_cpus
+        )
+
+        if len(allocatable_cpus) < num_of_cores:
+            return "", to_ranges(sorted(rejected_cpus))
+
+        cores_to_allocate = set(sorted(allocatable_cpus)[:num_of_cores])
+
+        prev_alloc_str = self._allocations.get(service_name, "")
+        prev_in_node = get_cpus_in_numa_node(numa_node, prev_alloc_str)
+
+        for other_service, other_cores_str in list(self._allocations.items()):
+            if other_service == service_name:
+                continue
+            other_set = self._parse_cpu_ranges(other_cores_str)
+            overlap = other_set & cores_to_allocate
+            if overlap:
+                self._subtract_cpus_from_service(other_service, overlap)
+
+        self._apply_numa_explicit_allocation(service_name, numa_node, cores_to_allocate)
+
+        allocated_cores_str = to_ranges(sorted(cores_to_allocate))
+        if prev_in_node:
             logging.info(
-                f"Explicitly allocated cores {to_ranges(sorted(allocatable_cpus))} to service {service_name}"
+                f"Overrode NUMA node {numa_node} allocation for service {service_name}: {allocated_cores_str}"
+            )
+        else:
+            logging.info(
+                f"Appended NUMA node {numa_node} allocation for service {service_name}: {allocated_cores_str}"
             )
 
-        allocated_cores_str = to_ranges(sorted(allocatable_cpus)) if allocatable_cpus else ""
-        rejected_cores_str = to_ranges(sorted(rejected_cpus)) if rejected_cpus else ""
-        return allocated_cores_str, rejected_cores_str
+        return allocated_cores_str, ""
 
     def get_allocation(self, service_name: str) -> Optional[str]:
         """Get the allocated cores for a specific service.
