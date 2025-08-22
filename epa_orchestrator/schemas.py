@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Pydantic schemas for socket communication."""
 from enum import Enum
-from typing import Annotated, List, Literal, Union
+from typing import Annotated, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -14,31 +14,21 @@ class ActionType(str, Enum):
 
     ALLOCATE_CORES = "allocate_cores"
     LIST_ALLOCATIONS = "list_allocations"
-    EXPLICITLY_ALLOCATE_CORES = "explicitly_allocate_cores"
-    EXPLICITLY_ALLOCATE_NUMA_CORES = "explicitly_allocate_numa_cores"
+    ALLOCATE_NUMA_CORES = "allocate_numa_cores"
 
 
 class AllocateCoresRequest(BaseModel):
-    """Request model for allocating cores."""
+    """Request model for allocating cores (non-NUMA)."""
 
     version: Literal["1.0"] = Field(default=API_VERSION)
     action: Literal[ActionType.ALLOCATE_CORES]
     service_name: str = Field(description="Name of the requesting service")
-    cores_requested: int = Field(
+    num_of_cores: int = Field(
         default=0,
-        ge=0,
-        description="Number of dedicated cores requested (0 means default allocation)",
+        description=("Number of dedicated cores requested. 0 keeps default policy."),
     )
-
-
-class ExplicitlyAllocateCoresRequest(BaseModel):
-    """Request model for explicitly allocating specific cores."""
-
-    version: Literal["1.0"] = Field(default=API_VERSION)
-    action: Literal[ActionType.EXPLICITLY_ALLOCATE_CORES]
-    service_name: str = Field(description="Name of the requesting service")
-    cores_requested: str = Field(
-        description="Comma-separated list of specific CPU ranges to allocate (e.g., '0-2,4,6')"
+    numa_node: Optional[int] = Field(
+        default=None, ge=0, description="NUMA node (must be omitted for allocate_cores)"
     )
 
 
@@ -50,27 +40,26 @@ class ListAllocationsRequest(BaseModel):
     service_name: str = Field(description="Name of the requesting service")
 
 
-class ExplicitlyAllocateNumaCoresRequest(BaseModel):
-    """Request model for explicitly allocating cores from a specific NUMA node.
+class AllocateNumaCoresRequest(BaseModel):
+    """Request model for allocating cores from a specific NUMA node.
 
-    Note: setting num_of_cores to 0 will deallocate any existing cores for this
-    service in the specified NUMA node.
+    Note:
+        - num_of_cores > 0: allocate exactly that many cores from the node
+        - num_of_cores == -1: deallocate existing cores for this service in the node
+        - num_of_cores == 0: invalid
     """
 
     version: Literal["1.0"] = Field(default=API_VERSION)
-    action: Literal[ActionType.EXPLICITLY_ALLOCATE_NUMA_CORES]
+    action: Literal[ActionType.ALLOCATE_NUMA_CORES]
     service_name: str = Field(description="Name of the requesting service")
     numa_node: int = Field(ge=0, description="NUMA node to allocate cores from")
-    num_of_cores: int = Field(
-        ge=0, description="Number of cores to allocate from the NUMA node (0 to deallocate)"
-    )
+    num_of_cores: int = Field(description="Number of cores to allocate (-1 to deallocate)")
 
 
 EpaRequest = Annotated[
     Union[
         AllocateCoresRequest,
-        ExplicitlyAllocateCoresRequest,
-        ExplicitlyAllocateNumaCoresRequest,
+        AllocateNumaCoresRequest,
         ListAllocationsRequest,
     ],
     Field(discriminator="action"),
@@ -82,7 +71,7 @@ class AllocateCoresResponse(BaseModel):
 
     version: Literal["1.0"] = Field(default=API_VERSION)
     service_name: str = Field(description="Name of the service that was allocated cores")
-    cores_requested: int = Field(description="Number of cores that were requested")
+    num_of_cores: int = Field(description="Number of cores that were requested")
     cores_allocated: int = Field(description="Number of cores that were actually allocated")
     allocated_cores: str = Field(description="Comma-separated list of allocated CPU ranges")
     shared_cpus: str = Field(description="Comma-separated list of shared CPU ranges")
@@ -92,26 +81,13 @@ class AllocateCoresResponse(BaseModel):
     )
 
 
-class ExplicitlyAllocateCoresResponse(BaseModel):
-    """Pydantic model for explicit allocate cores response."""
-
-    version: Literal["1.0"] = Field(default=API_VERSION)
-    service_name: str = Field(description="Name of the service that was allocated cores")
-    cores_requested: str = Field(description="Specific cores that were requested")
-    cores_allocated: str = Field(description="Cores that were actually allocated")
-    total_available_cpus: int = Field(description="Total number of CPUs available in the system")
-    remaining_available_cpus: int = Field(
-        description="Number of CPUs still available for allocation"
-    )
-
-
-class ExplicitlyAllocateNumaCoresResponse(BaseModel):
-    """Pydantic model for explicit NUMA allocate cores response."""
+class AllocateNumaCoresResponse(BaseModel):
+    """Pydantic model for NUMA allocate cores response."""
 
     version: Literal["1.0"] = Field(default=API_VERSION)
     service_name: str = Field(description="Name of the service that was allocated cores")
     numa_node: int = Field(description="NUMA node cores were allocated from")
-    num_of_cores: int = Field(description="Number of cores that were requested")
+    num_of_cores: int = Field(description="Number of cores that were requested (or -1 to dealloc)")
     cores_allocated: str = Field(description="Cores that were actually allocated")
     total_available_cpus: int = Field(description="Total number of CPUs available in the system")
     remaining_available_cpus: int = Field(

@@ -2,19 +2,19 @@
 
 This repository contains the source for the EPA Orchestrator snap.
 
-**EPA Orchestrator** is designed to provide secure, policy-driven resource orchestration for snaps and workloads on Linux systems. Its vision is to enable fine-grained, dynamic allocation and management of system resources—starting with CPU pinning, but with plans to expand to other resource types and orchestration policies. The orchestrator exposes a secure Unix socket API for resource allocation and introspection, making it easy for other snaps (such as openstack-hypervisor) and workloads to request and manage dedicated or shared resources in a controlled manner.
+**EPA Orchestrator** is designed to provide secure, policy-driven resource orchestration for snaps and workloads on Linux systems. Its vision is to enable fine-grained, dynamic allocation and management of system resources—starting with CPU pinning, with support for NUMA-aware allocations. The orchestrator exposes a secure Unix socket API for resource allocation and introspection, making it easy for other snaps (such as openstack-hypervisor) and workloads to request and manage dedicated or shared resources in a controlled manner.
 
 ## Features
 
 - **CPU Pinning and Allocation**: Allocate isolated and shared CPU sets to snaps and workloads, supporting both dedicated and shared CPU usage models with basic system-size heuristics.
-- **Explicit Core Allocation**: Request specific CPU cores by their exact identifiers. Atomic behavior: if any requested core is invalid or explicitly owned by another service, the request fails (no partial allocation). Non-explicit allocations are force-reallocated.
+- **NUMA-Aware Core Allocation**: Request a specific number of cores from a particular NUMA node with override/append semantics and exact-count guarantees.
 - **Resource Introspection**: Query current allocations and available resources via a secure API.
 - **Secure Unix Socket API**: All orchestration actions are performed via a secure, local Unix socket with JSON-based requests and responses.
 - **Basic Allocation Heuristics**: Automatic allocation based on system size (small vs large systems) when no specific core count is requested.
 
 ### CPU Allocation Policy: Small vs. Large Systems
 
-When a client requests core allocation with `cores_requested: 0`, EPA Orchestrator applies a policy based on the total number of CPUs detected:
+When a client requests core allocation with `num_of_cores: 0`, EPA Orchestrator applies a policy based on the total number of CPUs detected:
 
 - **Small systems (≤100 CPUs):**
   - By default, 80% of the available CPUs are allocated to the requesting snap or workload.
@@ -25,14 +25,6 @@ When a client requests core allocation with `cores_requested: 0`, EPA Orchestrat
 
 This policy ensures that on large servers, a fixed number of CPUs are always available for system or shared use, while on smaller systems, a proportional allocation is used.
 
-### Explicit Core Allocation Policy
-
-The explicit allocation action allows services to request specific CPU cores by their exact identifiers:
-
-- **Force Reallocation**: Explicit allocation will override any existing non-explicit allocations to other services.
-- **Atomic Conflict Prevention**: If any requested core is explicitly allocated to another service, the request fails with an error; no partial allocation occurs.
-- **Priority System**: Explicit allocations take precedence over automatic allocations and cannot be overridden by other services.
-
 ### NUMA-Aware Core Allocation Policy
 
 The NUMA-aware allocation action allows services to request a specific number of cores from a particular NUMA node:
@@ -42,11 +34,7 @@ The NUMA-aware allocation action allows services to request a specific number of
 - **Atomic Exact-Count**: If fewer than the requested number of cores are available in the NUMA node, the request fails with an error; no partial allocation occurs.
 - **Priority System**: NUMA allocations take precedence over automatic allocations and cannot be overridden by other services.
 - **Per-NUMA override/append semantics**: If the same service requests the same NUMA node again, it overrides previous cores from that node. If it requests a different NUMA node, the new cores are appended so the service may hold allocations across multiple NUMA nodes.
-- **Per-NUMA deallocation**: Sending num_of_cores=0 for a node deallocates any existing cores for that service in that node.
-
-### Planned Features
-
-- **Memory Pinning and Allocation**: Enable allocation and isolation of memory resources for snaps and workloads.
+- **Per-NUMA deallocation**: Sending `num_of_cores = -1` for a node deallocates any existing cores for that service in that node. `num_of_cores = 0` is invalid for NUMA.
 
 ## Getting Started
 
@@ -81,11 +69,12 @@ Request CPU allocation for a specific service:
   "version": "1.0",
   "service_name": "my-service",
   "action": "allocate_cores",
-  "cores_requested": 2
+  "num_of_cores": 2
 }
 ```
 
-- `cores_requested`: Number of cores to allocate (0 = 80% of total CPUs)
+- `num_of_cores`: Number of cores to allocate. `0` (80% of total CPUs).
+- `numa_node` is not allowed for this action and will be rejected.
 
 #### Response Example (Success)
 
@@ -93,7 +82,7 @@ Request CPU allocation for a specific service:
 {
   "version": "1.0",
   "service_name": "my-service",
-  "cores_requested": 2,
+  "num_of_cores": 2,
   "cores_allocated": 2,
   "allocated_cores": "0-1",
   "shared_cpus": "2-19",
@@ -111,44 +100,7 @@ Request CPU allocation for a specific service:
 }
 ```
 
-#### 2. Explicitly Allocate Cores (`explicitly_allocate_cores`)
-
-Request specific CPU cores by their exact identifiers:
-
-```json
-{
-  "version": "1.0",
-  "service_name": "my-service",
-  "action": "explicitly_allocate_cores",
-  "cores_requested": "0-2,4,6"
-}
-```
-
-- `cores_requested`: Comma-separated list of specific CPU ranges to allocate (e.g., "0-2,4,6")
-
-#### Response Example (Success)
-
-```json
-{
-  "version": "1.0",
-  "service_name": "my-service",
-  "cores_requested": "0-2,4,6",
-  "cores_allocated": "0-2,4,6",
-  "total_available_cpus": 20,
-  "remaining_available_cpus": 14
-}
-```
-
-#### Response Example (Conflict Error)
-
-```json
-{
-  "version": "1.0",
-  "error": "Failed to allocate requested explicit cores; conflicts with existing explicit allocations: 6"
-}
-```
-
-#### 3. Explicitly Allocate NUMA Cores (`explicitly_allocate_numa_cores`)
+#### 2. Allocate NUMA Cores (`allocate_numa_cores`)
 
 Request a specific number of cores from a particular NUMA node:
 
@@ -156,7 +108,7 @@ Request a specific number of cores from a particular NUMA node:
 {
   "version": "1.0",
   "service_name": "my-service",
-  "action": "explicitly_allocate_numa_cores",
+  "action": "allocate_numa_cores",
   "numa_node": 1,
   "num_of_cores": 5
 }
@@ -164,6 +116,9 @@ Request a specific number of cores from a particular NUMA node:
 
 - `numa_node`: NUMA node ID to allocate cores from (0-based)
 - `num_of_cores`: Number of cores to allocate from the specified NUMA node
+  - `> 0` allocates exactly that many cores
+  - `-1` deallocates any existing cores for that service in that node
+  - `0` is invalid
 
 #### Response Example (Success)
 
@@ -195,14 +150,14 @@ Request a specific number of cores from a particular NUMA node:
   "version": "1.0",
   "service_name": "my-service",
   "numa_node": 1,
-  "num_of_cores": 0,
+  "num_of_cores": -1,
   "cores_allocated": "",
   "total_available_cpus": 20,
   "remaining_available_cpus": 20
 }
 ```
 
-#### 4. List Allocations (`list_allocations`)
+#### 3. List Allocations (`list_allocations`)
 
 Get all current service allocations:
 
@@ -250,44 +205,6 @@ Get all current service allocations:
   "total_available_cpus": 0,
   "remaining_available_cpus": 0,
   "allocations": []
-}
-```
-
-##### Example: Override vs Append
-
-1) First request (node 1):
-
-```json
-{
-  "version": "1.0",
-  "service_name": "my-service",
-  "action": "explicitly_allocate_numa_cores",
-  "numa_node": 1,
-  "num_of_cores": 2
-}
-```
-
-2) Second request from the same service (same node 1): overrides previous cores in node 1
-
-```json
-{
-  "version": "1.0",
-  "service_name": "my-service",
-  "action": "explicitly_allocate_numa_cores",
-  "numa_node": 1,
-  "num_of_cores": 3
-}
-```
-
-3) Third request from the same service (different node 0): appends to existing allocation
-
-```json
-{
-  "version": "1.0",
-  "service_name": "my-service",
-  "action": "explicitly_allocate_numa_cores",
-  "numa_node": 0,
-  "num_of_cores": 1
 }
 ```
 

@@ -15,31 +15,23 @@ from epa_orchestrator.schemas import (
     ActionType,
     AllocateCoresRequest,
     AllocateCoresResponse,
+    AllocateNumaCoresRequest,
+    AllocateNumaCoresResponse,
     ErrorResponse,
-    ExplicitlyAllocateCoresRequest,
-    ExplicitlyAllocateCoresResponse,
-    ExplicitlyAllocateNumaCoresRequest,
-    ExplicitlyAllocateNumaCoresResponse,
     ListAllocationsRequest,
     ListAllocationsResponse,
     SnapAllocation,
 )
 from epa_orchestrator.utils import _count_cpus_in_ranges
 
-from .utils import parse_cpu_ranges
-
 logging.basicConfig(level=logging.INFO)
 
 
 def handle_allocate_cores(request: AllocateCoresRequest) -> AllocateCoresResponse:
-    """Handle allocate cores action.
+    """Handle allocate cores action (non-NUMA)."""
+    if request.numa_node is not None:
+        raise ValueError("'numa_node' is not allowed for action allocate_cores")
 
-    Args:
-        request: The EPA request
-
-    Returns:
-        AllocateCoresResponse with detailed allocation information
-    """
     try:
         isolated = get_isolated_cpus()
     except RuntimeError as e:
@@ -50,22 +42,22 @@ def handle_allocate_cores(request: AllocateCoresRequest) -> AllocateCoresRespons
     # Get system statistics
     stats = allocations_db.get_system_stats(isolated)
 
-    # Get cores requested (default to 0 if None)
-    cores_requested = request.cores_requested or 0
+    # Get requested number of cores (default policy when 0)
+    num_of_cores = request.num_of_cores or 0
 
-    # Check if we can allocate the requested CPUs
-    if cores_requested > 0:
-        if not allocations_db.can_allocate_cpus(cores_requested, isolated):
+    # Check if we can allocate the requested CPUs when > 0
+    if num_of_cores > 0:
+        if not allocations_db.can_allocate_cpus(num_of_cores, isolated):
             available_cpus = allocations_db.get_available_cpus(isolated)
             raise ValueError(
-                f"Insufficient CPUs available. Requested: {cores_requested}, Available: {len(available_cpus)}"
+                f"Insufficient CPUs available. Requested: {num_of_cores}, Available: {len(available_cpus)}"
             )
 
     # Calculate CPU allocation
-    shared, dedicated = calculate_cpu_pinning(isolated, cores_requested)
+    shared, dedicated = calculate_cpu_pinning(isolated, num_of_cores)
 
     if not dedicated:
-        raise ValueError(f"Failed to allocate {cores_requested} cores")
+        raise ValueError(f"Failed to allocate {num_of_cores} cores")
 
     # Store the allocation in the database
     allocations_db.allocate_cores(request.service_name, dedicated)
@@ -76,7 +68,7 @@ def handle_allocate_cores(request: AllocateCoresRequest) -> AllocateCoresRespons
 
     return AllocateCoresResponse(
         service_name=request.service_name,
-        cores_requested=cores_requested,
+        num_of_cores=num_of_cores,
         cores_allocated=cores_allocated,
         allocated_cores=dedicated,
         shared_cpus=shared,
@@ -85,67 +77,18 @@ def handle_allocate_cores(request: AllocateCoresRequest) -> AllocateCoresRespons
     )
 
 
-def handle_explicitly_allocate_cores(
-    request: ExplicitlyAllocateCoresRequest,
-) -> ExplicitlyAllocateCoresResponse:
-    """Handle explicit allocate cores action.
+def handle_allocate_numa_cores(
+    request: AllocateNumaCoresRequest,
+) -> AllocateNumaCoresResponse:
+    """Handle allocate NUMA cores action.
 
-    Args:
-        request: The EPA request for explicit core allocation
-
-    Returns:
-        ExplicitlyAllocateCoresResponse with allocation results
-    """
-    try:
-        isolated = get_isolated_cpus()
-    except RuntimeError as e:
-        raise ValueError("No Isolated CPUs configured") from e
-    if not isolated:
-        raise ValueError("No CPUs available")
-
-    stats = allocations_db.get_system_stats(isolated)
-
-    requested_cpu_set = parse_cpu_ranges(request.cores_requested)
-    isolated_cpu_set = parse_cpu_ranges(isolated)
-
-    invalid_cpus = requested_cpu_set - isolated_cpu_set
-    if invalid_cpus:
-        raise ValueError(
-            f"Requested cores {invalid_cpus} are not available in isolated CPUs: {isolated}"
-        )
-
-    allocated_cores, rejected_cores = allocations_db.explicitly_allocate_cores(
-        request.service_name, request.cores_requested
-    )
-
-    if not allocated_cores:
-        raise ValueError(
-            f"Failed to allocate requested explicit cores; conflicts with existing explicit allocations: {rejected_cores}"
-        )
-
-    updated_stats = allocations_db.get_system_stats(isolated)
-
-    return ExplicitlyAllocateCoresResponse(
-        service_name=request.service_name,
-        cores_requested=request.cores_requested,
-        cores_allocated=allocated_cores,
-        total_available_cpus=stats["total_available_cpus"],
-        remaining_available_cpus=updated_stats["remaining_available_cpus"],
-    )
-
-
-def handle_explicitly_allocate_numa_cores(
-    request: ExplicitlyAllocateNumaCoresRequest,
-) -> ExplicitlyAllocateNumaCoresResponse:
-    """Handle explicit NUMA allocate cores action.
-
-    Args:
-        request: The EPA request for explicit NUMA core allocation
-
-    Returns:
-        ExplicitlyAllocateNumaCoresResponse with allocation results
+    Supports exact-count allocation and per-node deallocation with num_of_cores = -1.
     """
     from epa_orchestrator.utils import get_cpus_in_numa_node, get_numa_node_cpus
+
+    # Validate num_of_cores semantics for NUMA
+    if request.num_of_cores == 0:
+        raise ValueError("num_of_cores=0 is invalid for allocate_numa_cores")
 
     isolated = get_isolated_cpus()
     stats = allocations_db.get_system_stats(isolated)
@@ -153,23 +96,38 @@ def handle_explicitly_allocate_numa_cores(
 
     if request.numa_node not in numa_cpus:
         raise ValueError(f"NUMA node {request.numa_node} does not exist")
-    available_numa_cpus = get_cpus_in_numa_node(request.numa_node, isolated)
 
+    if request.num_of_cores == -1:
+        # Deallocate any existing cores for this service in the specified node
+        allocated_cores, _ = allocations_db.allocate_numa_cores(
+            request.service_name, request.numa_node, request.num_of_cores
+        )
+        updated_stats = allocations_db.get_system_stats(isolated)
+        return AllocateNumaCoresResponse(
+            service_name=request.service_name,
+            numa_node=request.numa_node,
+            num_of_cores=request.num_of_cores,
+            cores_allocated=allocated_cores,
+            total_available_cpus=stats["total_available_cpus"],
+            remaining_available_cpus=updated_stats["remaining_available_cpus"],
+        )
+
+    # Allocation path (num_of_cores > 0)
+    available_numa_cpus = get_cpus_in_numa_node(request.numa_node, isolated)
     if not available_numa_cpus:
         raise ValueError(f"No isolated CPUs available in NUMA node {request.numa_node}")
 
-    if len(available_numa_cpus) < request.num_of_cores and request.num_of_cores != 0:
+    if len(available_numa_cpus) < request.num_of_cores:
         raise ValueError(
-            f"NUMA node {request.numa_node} only has {len(available_numa_cpus)} "
-            f"isolated CPUs, but {request.num_of_cores} were requested"
+            f"NUMA node {request.numa_node} only has {len(available_numa_cpus)} isolated CPUs, "
+            f"but {request.num_of_cores} were requested"
         )
 
-    allocated_cores, _ = allocations_db.explicitly_allocate_numa_cores(
+    allocated_cores, _ = allocations_db.allocate_numa_cores(
         request.service_name, request.numa_node, request.num_of_cores
     )
 
-    # For deallocation (num_of_cores==0), we return empty cores_allocated as success
-    if request.num_of_cores != 0 and not allocated_cores:
+    if not allocated_cores:
         raise ValueError(
             f"Failed to allocate cores from NUMA node {request.numa_node}. "
             f"All requested cores may be explicitly allocated to other services."
@@ -177,7 +135,7 @@ def handle_explicitly_allocate_numa_cores(
 
     updated_stats = allocations_db.get_system_stats(isolated)
 
-    return ExplicitlyAllocateNumaCoresResponse(
+    return AllocateNumaCoresResponse(
         service_name=request.service_name,
         numa_node=request.numa_node,
         num_of_cores=request.num_of_cores,
@@ -255,8 +213,7 @@ def handle_daemon_request(data: bytes) -> bytes:
 
         response: Union[
             AllocateCoresResponse,
-            ExplicitlyAllocateCoresResponse,
-            ExplicitlyAllocateNumaCoresResponse,
+            AllocateNumaCoresResponse,
             ListAllocationsResponse,
             ErrorResponse,
         ]
@@ -269,23 +226,12 @@ def handle_daemon_request(data: bytes) -> bytes:
             ac_req: AllocateCoresRequest = AllocateCoresRequest.parse_obj(request_data)
             response = handle_allocate_cores(ac_req)
         elif action_value in (
-            ActionType.EXPLICITLY_ALLOCATE_CORES,
-            ActionType.EXPLICITLY_ALLOCATE_CORES.value,
-            "explicitly_allocate_cores",
+            ActionType.ALLOCATE_NUMA_CORES,
+            ActionType.ALLOCATE_NUMA_CORES.value,
+            "allocate_numa_cores",
         ):
-            ex_req: ExplicitlyAllocateCoresRequest = ExplicitlyAllocateCoresRequest.parse_obj(
-                request_data
-            )
-            response = handle_explicitly_allocate_cores(ex_req)
-        elif action_value in (
-            ActionType.EXPLICITLY_ALLOCATE_NUMA_CORES,
-            ActionType.EXPLICITLY_ALLOCATE_NUMA_CORES.value,
-            "explicitly_allocate_numa_cores",
-        ):
-            numa_req: ExplicitlyAllocateNumaCoresRequest = (
-                ExplicitlyAllocateNumaCoresRequest.parse_obj(request_data)
-            )
-            response = handle_explicitly_allocate_numa_cores(numa_req)
+            numa_req: AllocateNumaCoresRequest = AllocateNumaCoresRequest.parse_obj(request_data)
+            response = handle_allocate_numa_cores(numa_req)
         elif action_value in (
             ActionType.LIST_ALLOCATIONS,
             ActionType.LIST_ALLOCATIONS.value,
