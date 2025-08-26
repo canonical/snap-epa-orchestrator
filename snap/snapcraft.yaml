@@ -16,7 +16,6 @@ apps:
     daemon: simple
     plugs:
       - network-bind
-      - epa-sys-read
     slots:
       - epa-info
 
@@ -41,11 +40,3 @@ slots:
     source:
       write:
         - $SNAP_DATA/data
-
-plugs:
-  epa-sys-read:
-    interface: system-files
-    read:
-      - /sys/devices/system/cpu/isolated
-      - /sys/devices/system/cpu/present
-      - /sys/devices/system/node
