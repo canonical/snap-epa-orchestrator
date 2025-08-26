@@ -133,27 +133,6 @@ def get_cpus_in_numa_node(numa_node: int, cpus_str: str) -> Set[int]:
     return all_cpus_in_numa.intersection(requested_cpus)
 
 
-def get_available_cpus_in_numa_node(numa_node: int, cpus_str: str) -> Set[int]:
-    """Get available CPUs in a NUMA node from a given CPU string.
-
-    Args:
-        numa_node: The NUMA node ID.
-        cpus_str: Comma-separated string of CPU ranges.
-
-    Returns:
-        A set of available CPU integers in the specified NUMA node.
-    """
-    available_set: Set[int] = set()
-    numa_cpus = get_numa_node_cpus().get(numa_node, set())
-    requested_cpus = parse_cpu_ranges(cpus_str)
-
-    for cpu in requested_cpus:
-        if cpu in numa_cpus:
-            available_set.add(cpu)
-
-    return available_set
-
-
 def _count_cpus_in_ranges(cpu_ranges: str) -> int:
     """Count the number of CPUs in a comma-separated range string.
 

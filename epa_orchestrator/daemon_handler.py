@@ -5,13 +5,13 @@
 
 import json
 import logging
-from typing import Dict, Union, cast
+from typing import Dict, List, Optional, Union, cast
 
 from pydantic import ValidationError
 
 from epa_orchestrator.allocations_db import allocations_db
 from epa_orchestrator.cpu_pinning import calculate_cpu_pinning, get_isolated_cpus
-from epa_orchestrator.hugepages_db import record_allocation
+from epa_orchestrator.hugepages_db import remove_allocation_for_key, upsert_allocation
 from epa_orchestrator.memory_manager import get_memory_summary
 from epa_orchestrator.schemas import (
     ActionType,
@@ -30,8 +30,6 @@ from epa_orchestrator.schemas import (
     SnapAllocation,
 )
 from epa_orchestrator.utils import _count_cpus_in_ranges
-
-logging.basicConfig(level=logging.INFO)
 
 
 def handle_allocate_cores(request: AllocateCoresRequest) -> AllocateCoresResponse:
@@ -180,13 +178,64 @@ def handle_allocate_hugepages(
 ) -> Union[AllocateHugepagesResponse, ErrorResponse]:
     """Handle allocate hugepages action (tracking only)."""
     try:
-        record_allocation(
+        # Validation for 0 is handled by schema; treat -1 as deallocation
+        if request.hugepages_requested == -1:
+            removed = remove_allocation_for_key(
+                request.service_name, request.node_id, request.size_kb
+            )
+            message = (
+                "Removed recorded hugepage allocation"
+                if removed
+                else "No existing record to remove"
+            )
+            return AllocateHugepagesResponse(
+                service_name=request.service_name,
+                hugepages_requested=request.hugepages_requested,
+                allocation_successful=True,
+                message=message,
+                node_id=request.node_id,
+                size_kb=request.size_kb,
+            )
+
+        # Capacity validation for positive requests
+        if request.hugepages_requested > 0:
+            summary = get_memory_summary()
+            if "error" in summary:
+                err = str(summary.get("error", "Unknown error"))
+                logging.error(f"Failed to get memory information: {err}")
+                return ErrorResponse(error=f"Failed to get memory information: {err}")
+
+            numa_hugepages = cast(Dict[str, Dict[str, object]], summary.get("numa_hugepages", {}))
+            node_key = f"node{request.node_id}"
+            node_info = numa_hugepages.get(node_key)
+            if not node_info:
+                return ErrorResponse(error=f"NUMA node {request.node_id} not found")
+
+            capacity_list = cast(List[Dict[str, int]], node_info.get("capacity", []))
+            size_entry: Optional[Dict[str, int]] = next(
+                (e for e in capacity_list if int(e.get("size", -1)) == request.size_kb),
+                None,
+            )
+            if not size_entry:
+                return ErrorResponse(
+                    error=f"Hugepage size {request.size_kb} KB not found on node {request.node_id}"
+                )
+
+            free = int(size_entry.get("free", 0))
+            if free < request.hugepages_requested:
+                return ErrorResponse(
+                    error=(
+                        f"NUMA node {request.node_id} size {request.size_kb} KB only has {free} "
+                        f"free hugepages, requested {request.hugepages_requested}"
+                    )
+                )
+
+        # Record (replace) the allocation request for this key
+        upsert_allocation(
             request.service_name, request.node_id, request.size_kb, request.hugepages_requested
         )
 
-        message = (
-            f"Successfully recorded allocation request for {request.hugepages_requested} hugepages"
-        )
+        message = f"Successfully set allocation request to {request.hugepages_requested} hugepages"
 
         return AllocateHugepagesResponse(
             service_name=request.service_name,

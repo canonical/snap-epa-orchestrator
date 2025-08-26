@@ -272,7 +272,7 @@ Record hugepage allocation request (tracking-only) for a specific NUMA node and 
 }
 ```
 
-- `hugepages_requested`: Number of hugepages to record
+- `hugepages_requested`: Number of hugepages to record (>0), use `-1` to deallocate, `0` is invalid
 - `node_id`: NUMA node ID for per-node tracking
 - `size_kb`: Hugepage size in KB (e.g., 2048 for 2MB, 1048576 for 1GB)
 
@@ -284,19 +284,36 @@ Record hugepage allocation request (tracking-only) for a specific NUMA node and 
   "service_name": "my-service",
   "hugepages_requested": 2,
   "allocation_successful": true,
-  "message": "Successfully recorded allocation request for 2 hugepages",
+  "message": "Successfully set allocation request to 2 hugepages",
   "node_id": 0,
   "size_kb": 2048
 }
 ```
 
-#### Response Example (Error)
+#### Response Example (Deallocate)
 
 ```json
 {
   "version": "1.0",
-  "error": "Failed to record hugepage allocation: internal error"
+  "service_name": "my-service",
+  "hugepages_requested": -1,
+  "allocation_successful": true,
+  "message": "Removed recorded hugepage allocation",
+  "node_id": 0,
+  "size_kb": 2048
 }
+```
+
+#### Response Examples (Errors)
+
+```json
+{ "version": "1.0", "error": "NUMA node 3 not found" }
+```
+```json
+{ "version": "1.0", "error": "Hugepage size 1048576 KB not found on node 0" }
+```
+```json
+{ "version": "1.0", "error": "NUMA node 0 size 2048 KB only has 5 free hugepages, requested 10" }
 ```
 
 ## Build

@@ -4,7 +4,7 @@
 from enum import Enum
 from typing import Annotated, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 API_VERSION: Literal["1.0"] = "1.0"
 
@@ -73,8 +73,7 @@ class AllocateHugepagesRequest(BaseModel):
     action: Literal[ActionType.ALLOCATE_HUGEPAGES]
     service_name: str = Field(description="Name of the requesting service")
     hugepages_requested: int = Field(
-        ge=0,
-        description="Number of hugepages to allocate",
+        description=("Number of hugepages to allocate (>0) or -1 to deallocate; 0 is invalid"),
     )
     node_id: int = Field(
         ge=0,
@@ -84,6 +83,14 @@ class AllocateHugepagesRequest(BaseModel):
         gt=0,
         description="Hugepage size in KB (e.g., 2048)",
     )
+
+    @field_validator("hugepages_requested")
+    @classmethod
+    def validate_hugepages_requested(cls, v: int) -> int:
+        """Disallow 0; allow positive values and -1 for deallocation."""
+        if v == 0:
+            raise ValueError("hugepages_requested=0 is invalid for allocate_hugepages")
+        return v
 
 
 EpaRequest = Annotated[
