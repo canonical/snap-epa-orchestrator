@@ -3,6 +3,7 @@
 
 """Utility functions for CPU range operations."""
 
+import os
 from typing import Dict, Set
 
 
@@ -89,32 +90,32 @@ def get_numa_node_cpus() -> Dict[int, Set[int]]:
     Returns:
         Dictionary mapping NUMA node ID to set of CPU core numbers
 
-    Note:
-        This function reads from /sys/devices/system/cpu/cpu*/topology/physical_package_id
-        to determine which CPUs belong to which NUMA nodes.
+    Raises:
+        ValueError: If NUMA topology is not available
     """
-    numa_cpus: Dict[int, Set[int]] = {}
+    base = "/sys/devices/system/node"
+    if not os.path.exists(base):
+        raise ValueError("NUMA topology not available")
 
-    # Get list of present CPUs
     try:
-        with open("/sys/devices/system/cpu/present", "r") as f:
-            present_cpus_str = f.read().strip()
-        present_cpus = parse_cpu_ranges(present_cpus_str)
-    except FileNotFoundError:
-        return {}
+        node_dirs = [d for d in os.listdir(base) if d.startswith("node") and d[4:].isdigit()]
+    except Exception:
+        node_dirs = []
 
-    # Process each CPU to determine its NUMA node
-    for cpu_id in present_cpus:
+    numa_cpus: Dict[int, Set[int]] = {}
+    for node_dir in sorted(node_dirs, key=lambda n: int(n[4:])):
+        cpulist_path = os.path.join(base, node_dir, "cpulist")
         try:
-            with open(
-                f"/sys/devices/system/cpu/cpu{cpu_id}/topology/physical_package_id",
-                "r",
-            ) as f:
-                numa_node = int(f.read().strip())
-            numa_cpus.setdefault(numa_node, set()).add(cpu_id)
-        except FileNotFoundError:
-            # If topology file doesn't exist, assume CPU is not NUMA-aware or skip
-            continue
+            with open(cpulist_path, "r") as f:
+                cpulist_str = f.read().strip()
+        except Exception:
+            cpulist_str = ""
+        cpus = parse_cpu_ranges(cpulist_str)
+        if cpus:
+            numa_cpus[int(node_dir[4:])] = cpus
+
+    if not numa_cpus:
+        raise ValueError("NUMA topology not available")
     return numa_cpus
 
 

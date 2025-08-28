@@ -9,9 +9,13 @@ from unittest.mock import patch
 import pytest
 from pydantic import parse_obj_as
 
+from epa_orchestrator.allocations_db import allocations_db
 from epa_orchestrator.cpu_pinning import calculate_cpu_pinning, get_isolated_cpus
 from epa_orchestrator.daemon_handler import (
+    handle_allocate_cores,
+    handle_allocate_numa_cores,
     handle_daemon_request,
+    handle_list_allocations,
 )
 from epa_orchestrator.hugepages_db import list_allocations_for_node
 from epa_orchestrator.schemas import (
@@ -19,9 +23,26 @@ from epa_orchestrator.schemas import (
     AllocateCoresRequest,
     AllocateCoresResponse,
     AllocateHugepagesResponse,
+    AllocateNumaCoresRequest,
     ErrorResponse,
+    ListAllocationsRequest,
 )
 from epa_orchestrator.utils import parse_cpu_ranges
+
+
+def _list_allocations() -> dict:
+    """Helper: call list_allocations and return dict form."""
+    resp = handle_list_allocations(
+        ListAllocationsRequest(service_name="probe", action=ActionType.LIST_ALLOCATIONS)
+    )
+    return resp.dict()
+
+
+def _get_service_entry(service_name: str) -> dict | None:
+    """Helper: return allocation entry for a given service if present."""
+    data = _list_allocations()
+    allocations = data.get("allocations", [])
+    return next((e for e in allocations if e.get("service_name") == service_name), None)
 
 
 class TestDaemonIntegration:
@@ -94,8 +115,14 @@ class TestDaemonIntegration:
         assert resp.node_id == 0
         assert resp.size_kb == 2048
 
-    def test_allocate_hugepages_deallocate_minus_one(self):
+    @patch("epa_orchestrator.daemon_handler.get_memory_summary")
+    def test_allocate_hugepages_deallocate_minus_one(self, mock_summary):
         """-1 should remove record and succeed with message."""
+        mock_summary.return_value = {
+            "numa_hugepages": {
+                "node1": {"capacity": [{"total": 10, "free": 10, "size": 2048}], "allocations": {}}
+            }
+        }
         # First add a record, then deallocate
         add_req = {
             "version": "1.0",
@@ -121,7 +148,25 @@ class TestDaemonIntegration:
         assert resp.hugepages_requested == -1
         assert resp.node_id == 1
         assert resp.size_kb == 2048
-        assert "Removed" in resp.message or "No existing record" in resp.message
+        assert resp.message.startswith("Removed recorded")
+
+    def test_allocate_hugepages_deallocate_minus_one_noop(self):
+        """-1 on a missing record returns a specific noop message."""
+        del_req = {
+            "version": "1.0",
+            "service_name": "svc-missing",
+            "action": "allocate_hugepages",
+            "hugepages_requested": -1,
+            "node_id": 1,
+            "size_kb": 2048,
+        }
+        response_bytes = handle_daemon_request(json.dumps(del_req).encode())
+        resp = parse_obj_as(AllocateHugepagesResponse, json.loads(response_bytes.decode()))
+        assert resp.allocation_successful is True
+        assert resp.hugepages_requested == -1
+        assert resp.node_id == 1
+        assert resp.size_kb == 2048
+        assert resp.message.startswith("No existing record")
 
     def test_allocate_hugepages_zero_invalid(self):
         """0 is invalid and should return an ErrorResponse."""
@@ -235,3 +280,233 @@ class TestDaemonIntegration:
             e["count"] for e in flattened if e["service_name"] == "svc" and e["size_kb"] == 2048
         ]
         assert counts.count(7) == 1
+
+    def test_allocate_cores_valid_override_and_second_service(self):
+        """Allocate cores, then override; add second service within remaining."""
+        allocations_db.clear_all_allocations()
+        with patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-5"):
+            r1 = handle_allocate_cores(
+                AllocateCoresRequest(
+                    service_name="svc-a-core", action=ActionType.ALLOCATE_CORES, num_of_cores=1
+                )
+            )
+            assert r1.cores_allocated == 1
+            a1 = _get_service_entry("svc-a-core")
+            assert a1 and int(a1["cores_count"]) == 1 and a1["is_explicit"] is False
+
+            r2 = handle_allocate_cores(
+                AllocateCoresRequest(
+                    service_name="svc-a-core", action=ActionType.ALLOCATE_CORES, num_of_cores=2
+                )
+            )
+            assert r2.cores_allocated == 2
+            a2 = _get_service_entry("svc-a-core")
+            assert a2 and int(a2["cores_count"]) == 2
+
+            r3 = handle_allocate_cores(
+                AllocateCoresRequest(
+                    service_name="svc-b-core", action=ActionType.ALLOCATE_CORES, num_of_cores=1
+                )
+            )
+            assert r3.cores_allocated == 1
+            b = _get_service_entry("svc-b-core")
+            assert b and int(b["cores_count"]) == 1
+
+    def test_allocate_cores_out_of_bound_and_invalid_param(self):
+        """Out-of-bound request errors; numa_node param rejected for allocate_cores."""
+        allocations_db.clear_all_allocations()
+        with patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-5"):
+            _ = handle_allocate_cores(
+                AllocateCoresRequest(
+                    service_name="svc-a-core", action=ActionType.ALLOCATE_CORES, num_of_cores=5
+                )
+            )
+            with pytest.raises(ValueError) as ei:
+                _ = handle_allocate_cores(
+                    AllocateCoresRequest(
+                        service_name="svc-c-core", action=ActionType.ALLOCATE_CORES, num_of_cores=2
+                    )
+                )
+            assert "Insufficient CPUs available" in str(ei.value)
+
+            with pytest.raises(ValueError) as ei2:
+                _ = handle_allocate_cores(
+                    AllocateCoresRequest(
+                        service_name="svc-x",
+                        action=ActionType.ALLOCATE_CORES,
+                        num_of_cores=1,
+                        numa_node=0,
+                    )
+                )
+            assert "'numa_node' is not allowed" in str(ei2.value)
+
+    @patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-5")
+    @patch("epa_orchestrator.cpu_pinning.get_isolated_cpus", return_value="0-5")
+    @patch(
+        "epa_orchestrator.utils.get_numa_node_cpus",
+        return_value={0: {0, 1, 2}, 1: {3, 4, 5}},
+    )
+    def test_allocate_numa_valid_override_and_second_service(
+        self, mock_nodes, mock_iso_cp, mock_iso_dh
+    ):
+        """Allocate in node, override count; second service consumes same node."""
+        allocations_db.clear_all_allocations()
+        r1 = handle_allocate_numa_cores(
+            AllocateNumaCoresRequest(
+                service_name="svc-a-numa",
+                action=ActionType.ALLOCATE_NUMA_CORES,
+                numa_node=0,
+                num_of_cores=1,
+            )
+        )
+        assert r1.cores_allocated != ""
+        a1 = _get_service_entry("svc-a-numa")
+        assert a1 and a1["is_explicit"] is True and int(a1["cores_count"]) >= 1
+
+        r2 = handle_allocate_numa_cores(
+            AllocateNumaCoresRequest(
+                service_name="svc-a-numa",
+                action=ActionType.ALLOCATE_NUMA_CORES,
+                numa_node=0,
+                num_of_cores=2,
+            )
+        )
+        assert r2.cores_allocated != ""
+        a2 = _get_service_entry("svc-a-numa")
+        assert a2 and a2["is_explicit"] is True and int(a2["cores_count"]) >= 2
+
+        r3 = handle_allocate_numa_cores(
+            AllocateNumaCoresRequest(
+                service_name="svc-b-numa",
+                action=ActionType.ALLOCATE_NUMA_CORES,
+                numa_node=0,
+                num_of_cores=1,
+            )
+        )
+        assert r3.cores_allocated != ""
+
+    @patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-5")
+    @patch(
+        "epa_orchestrator.utils.get_numa_node_cpus",
+        return_value={0: {0, 1, 2}, 1: {3, 4, 5}},
+    )
+    def test_allocate_numa_overask_and_zero_invalid(self, mock_nodes, mock_iso_dh):
+        """Over-ask triggers error; num_of_cores=0 invalid for NUMA."""
+        allocations_db.clear_all_allocations()
+        with pytest.raises(ValueError) as ei:
+            _ = handle_allocate_numa_cores(
+                AllocateNumaCoresRequest(
+                    service_name="svc-c-numa",
+                    action=ActionType.ALLOCATE_NUMA_CORES,
+                    numa_node=0,
+                    num_of_cores=9999,
+                )
+            )
+        assert "only has" in str(ei.value)
+
+        with pytest.raises(ValueError) as ei2:
+            _ = handle_allocate_numa_cores(
+                AllocateNumaCoresRequest(
+                    service_name="svc-x",
+                    action=ActionType.ALLOCATE_NUMA_CORES,
+                    numa_node=0,
+                    num_of_cores=0,
+                )
+            )
+        assert "num_of_cores=0 is invalid" in str(ei2.value)
+
+    @patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-5")
+    @patch(
+        "epa_orchestrator.utils.get_numa_node_cpus",
+        return_value={1: {3, 4, 5}},
+    )
+    def test_allocate_numa_nonexistent_node(self, mock_nodes, mock_iso_dh):
+        """Requesting a NUMA node not present in topology raises error."""
+        allocations_db.clear_all_allocations()
+        with pytest.raises(ValueError) as ei:
+            _ = handle_allocate_numa_cores(
+                AllocateNumaCoresRequest(
+                    service_name="svc-x",
+                    action=ActionType.ALLOCATE_NUMA_CORES,
+                    numa_node=0,
+                    num_of_cores=1,
+                )
+            )
+        assert "NUMA node 0 does not exist" in str(ei.value)
+
+    @patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-5")
+    def test_allocate_numa_no_topology_error_response(self, mock_iso_dh):
+        """When topology lookup raises, daemon request returns ErrorResponse with message."""
+        req = {
+            "version": "1.0",
+            "action": "allocate_numa_cores",
+            "service_name": "svc-x",
+            "numa_node": 0,
+            "num_of_cores": 1,
+        }
+        with patch(
+            "epa_orchestrator.utils.get_numa_node_cpus",
+            side_effect=ValueError("NUMA topology not available"),
+        ):
+            resp_b = handle_daemon_request(json.dumps(req).encode())
+            resp = parse_obj_as(ErrorResponse, json.loads(resp_b.decode()))
+            assert resp.error == "NUMA topology not available"
+
+    @patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-5")
+    @patch("epa_orchestrator.cpu_pinning.get_isolated_cpus", return_value="0-5")
+    @patch(
+        "epa_orchestrator.utils.get_numa_node_cpus",
+        return_value={0: {0, 1, 2}, 1: {3, 4, 5}},
+    )
+    def test_allocate_numa_deallocate_path(self, mock_nodes, mock_iso_cp, mock_iso_dh):
+        """Deallocate path clears service's allocation in the specified node."""
+        allocations_db.clear_all_allocations()
+        _ = handle_allocate_numa_cores(
+            AllocateNumaCoresRequest(
+                service_name="svc-a-numa",
+                action=ActionType.ALLOCATE_NUMA_CORES,
+                numa_node=0,
+                num_of_cores=2,
+            )
+        )
+        r = handle_allocate_numa_cores(
+            AllocateNumaCoresRequest(
+                service_name="svc-a-numa",
+                action=ActionType.ALLOCATE_NUMA_CORES,
+                numa_node=0,
+                num_of_cores=-1,
+            )
+        )
+        assert r.cores_allocated == ""
+        a = _get_service_entry("svc-a-numa")
+        assert a is None or int(a.get("cores_count", 0)) == 0
+
+    @patch("epa_orchestrator.daemon_handler.calculate_cpu_pinning", return_value=("", ""))
+    @patch("epa_orchestrator.cpu_pinning.get_isolated_cpus", return_value="0-3")
+    @patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-3")
+    def test_allocate_cores_pinning_failure(self, mock_iso_dh, mock_iso_cp, mock_calc):
+        """If pinning yields no dedicated CPUs, handler raises ValueError."""
+        allocations_db.clear_all_allocations()
+        with pytest.raises(ValueError) as ei:
+            _ = handle_allocate_cores(
+                AllocateCoresRequest(
+                    service_name="svc-pin-fail",
+                    action=ActionType.ALLOCATE_CORES,
+                    num_of_cores=2,
+                )
+            )
+        assert "Failed to allocate 2 cores" in str(ei.value)
+
+    @patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-3")
+    @patch("epa_orchestrator.cpu_pinning.get_isolated_cpus", return_value="0-3")
+    def test_allocate_cores_negative_request(self, mock_iso_cp, mock_iso_dh):
+        """Negative num_of_cores defers to default policy; expect successful allocation."""
+        allocations_db.clear_all_allocations()
+        r = handle_allocate_cores(
+            AllocateCoresRequest(
+                service_name="svc-neg",
+                action=ActionType.ALLOCATE_CORES,
+                num_of_cores=-1,
+            )
+        )
+        assert r.cores_allocated > 0
