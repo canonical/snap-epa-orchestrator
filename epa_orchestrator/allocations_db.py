@@ -6,8 +6,9 @@
 import logging
 from typing import Dict, Optional, Set, Tuple
 
+from .cpu_pinning import get_isolated_cpus
 from .schemas import SnapAllocation
-from .utils import parse_cpu_ranges, to_ranges
+from .utils import get_cpus_in_numa_node, parse_cpu_ranges, to_ranges
 
 
 class AllocationsDB:
@@ -128,8 +129,6 @@ class AllocationsDB:
         Returns:
             Tuple of (allocatable_cpus, rejected_cpus)
         """
-        from .utils import get_cpus_in_numa_node
-
         numa_cpus = get_cpus_in_numa_node(numa_node, isolated_cpus_str)
         if not numa_cpus:
             return set(), set()
@@ -175,8 +174,6 @@ class AllocationsDB:
         This overrides prior cores for this service within the same NUMA node,
         and appends allocations from other NUMA nodes.
         """
-        from .utils import get_cpus_in_numa_node
-
         current_allocation_set = self._get_service_allocation_set(service_name)
         current_allocation_str = to_ranges(sorted(current_allocation_set))
         existing_in_node = get_cpus_in_numa_node(numa_node, current_allocation_str)
@@ -211,9 +208,6 @@ class AllocationsDB:
         - num_of_cores == -1: deallocate existing cores for this service in the node
         - num_of_cores == 0: invalid; returns no-op ("", "")
         """
-        from .cpu_pinning import get_isolated_cpus
-        from .utils import get_cpus_in_numa_node, to_ranges
-
         isolated_cpus = get_isolated_cpus()
 
         if num_of_cores == 0:

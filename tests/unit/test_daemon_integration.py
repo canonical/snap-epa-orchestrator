@@ -341,7 +341,7 @@ class TestDaemonIntegration:
             assert "'numa_node' is not allowed" in str(ei2.value)
 
     @patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-5")
-    @patch("epa_orchestrator.cpu_pinning.get_isolated_cpus", return_value="0-5")
+    @patch("epa_orchestrator.allocations_db.get_isolated_cpus", return_value="0-5")
     @patch(
         "epa_orchestrator.utils.get_numa_node_cpus",
         return_value={0: {0, 1, 2}, 1: {3, 4, 5}},
@@ -416,11 +416,12 @@ class TestDaemonIntegration:
         assert "num_of_cores=0 is invalid" in str(ei2.value)
 
     @patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-5")
+    @patch("epa_orchestrator.allocations_db.get_isolated_cpus", return_value="0-5")
     @patch(
-        "epa_orchestrator.utils.get_numa_node_cpus",
+        "epa_orchestrator.daemon_handler.get_numa_node_cpus",
         return_value={1: {3, 4, 5}},
     )
-    def test_allocate_numa_nonexistent_node(self, mock_nodes, mock_iso_dh):
+    def test_allocate_numa_nonexistent_node(self, mock_nodes, mock_iso_cp, mock_iso_dh):
         """Requesting a NUMA node not present in topology raises error."""
         allocations_db.clear_all_allocations()
         with pytest.raises(ValueError) as ei:
@@ -453,7 +454,7 @@ class TestDaemonIntegration:
             assert resp.error == "NUMA topology not available"
 
     @patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-5")
-    @patch("epa_orchestrator.cpu_pinning.get_isolated_cpus", return_value="0-5")
+    @patch("epa_orchestrator.allocations_db.get_isolated_cpus", return_value="0-5")
     @patch(
         "epa_orchestrator.utils.get_numa_node_cpus",
         return_value={0: {0, 1, 2}, 1: {3, 4, 5}},

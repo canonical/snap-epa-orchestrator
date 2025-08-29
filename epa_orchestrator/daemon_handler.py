@@ -29,7 +29,11 @@ from epa_orchestrator.schemas import (
     NodeHugepagesInfo,
     SnapAllocation,
 )
-from epa_orchestrator.utils import _count_cpus_in_ranges
+from epa_orchestrator.utils import (
+    _count_cpus_in_ranges,
+    get_cpus_in_numa_node,
+    get_numa_node_cpus,
+)
 
 
 def handle_allocate_cores(request: AllocateCoresRequest) -> AllocateCoresResponse:
@@ -89,8 +93,6 @@ def handle_allocate_numa_cores(
 
     Supports exact-count allocation and per-node deallocation with num_of_cores = -1.
     """
-    from epa_orchestrator.utils import get_cpus_in_numa_node, get_numa_node_cpus
-
     # Validate num_of_cores semantics for NUMA
     if request.num_of_cores == 0:
         raise ValueError("num_of_cores=0 is invalid for allocate_numa_cores")
