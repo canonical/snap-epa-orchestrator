@@ -70,8 +70,9 @@ def mock_cpu_files(temp_dir):
     isolated_path.write_text("0-3,6-7")
     present_path.write_text("0-7")
 
-    with patch("epa_orchestrator.cpu_pinning.ISOLATED_CPUS_PATH", str(isolated_path)), patch(
-        "epa_orchestrator.cpu_pinning.PRESENT_CPUS_PATH", str(present_path)
+    with (
+        patch("epa_orchestrator.cpu_pinning.ISOLATED_CPUS_PATH", str(isolated_path)),
+        patch("epa_orchestrator.cpu_pinning.PRESENT_CPUS_PATH", str(present_path)),
     ):
         yield {
             "isolated": isolated_path,
@@ -91,8 +92,9 @@ def mock_cpu_files_empty(temp_dir):
     isolated_path.write_text("")
     present_path.write_text("0-7")
 
-    with patch("epa_orchestrator.cpu_pinning.ISOLATED_CPUS_PATH", str(isolated_path)), patch(
-        "epa_orchestrator.cpu_pinning.PRESENT_CPUS_PATH", str(present_path)
+    with (
+        patch("epa_orchestrator.cpu_pinning.ISOLATED_CPUS_PATH", str(isolated_path)),
+        patch("epa_orchestrator.cpu_pinning.PRESENT_CPUS_PATH", str(present_path)),
     ):
         yield {
             "isolated": isolated_path,
@@ -108,8 +110,9 @@ def mock_cpu_files_missing(temp_dir):
     isolated_path = temp_dir / "nonexistent_isolated"
     present_path = temp_dir / "nonexistent_present"
 
-    with patch("epa_orchestrator.cpu_pinning.ISOLATED_CPUS_PATH", str(isolated_path)), patch(
-        "epa_orchestrator.cpu_pinning.PRESENT_CPUS_PATH", str(present_path)
+    with (
+        patch("epa_orchestrator.cpu_pinning.ISOLATED_CPUS_PATH", str(isolated_path)),
+        patch("epa_orchestrator.cpu_pinning.PRESENT_CPUS_PATH", str(present_path)),
     ):
         yield {"isolated": isolated_path, "present": present_path}
 
