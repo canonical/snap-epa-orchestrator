@@ -382,8 +382,12 @@ def handle_daemon_request(data: bytes) -> bytes:
         response_bytes = error_response.json().encode()
 
     logging.info("EPA response: %s", response_bytes.decode())
-    list_resp = handle_list_allocations(
-        ListAllocationsRequest(service_name="", action=ActionType.LIST_ALLOCATIONS)
-    )
-    logging.info("EPA allocations: %s", list_resp.json())
+    try:
+        list_resp = handle_list_allocations(
+            ListAllocationsRequest(service_name="", action=ActionType.LIST_ALLOCATIONS)
+        )
+        logging.info("EPA allocations: %s", list_resp.json())
+    except Exception as e:
+        # Best-effort allocations logging; must not interfere with responding
+        logging.warning("Failed to list EPA allocations for logging: %s", e)
     return response_bytes
