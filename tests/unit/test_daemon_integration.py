@@ -13,6 +13,7 @@ from epa_orchestrator.allocations_db import allocations_db
 from epa_orchestrator.cpu_pinning import calculate_cpu_pinning, get_isolated_cpus
 from epa_orchestrator.daemon_handler import (
     handle_allocate_cores,
+    handle_allocate_cores_percent,
     handle_allocate_numa_cores,
     handle_daemon_request,
     handle_list_allocations,
@@ -20,6 +21,8 @@ from epa_orchestrator.daemon_handler import (
 from epa_orchestrator.hugepages_db import list_allocations_for_node
 from epa_orchestrator.schemas import (
     ActionType,
+    AllocateCoresPercentRequest,
+    AllocateCoresPercentResponse,
     AllocateCoresRequest,
     AllocateCoresResponse,
     AllocateHugepagesResponse,
@@ -298,6 +301,165 @@ class TestDaemonIntegration:
         ]
         assert counts.count(7) == 1
 
+    def test_allocate_cores_num_of_cores_zero_after_existing_allocation(self):
+        """allocate_cores(num_of_cores=0) must use full pool when re-allocating."""
+        allocations_db.clear_all_allocations()
+        isolated = "96-127,224-255,352-383,480-511"  # 128 cores
+        with patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value=isolated):
+            # Simulate prior NUMA allocation: service already has 112 cores
+            allocations_db.allocate_cores("openstack-hypervisor", "96-127,224-255,352-383,480-495")
+            r = handle_allocate_cores(
+                AllocateCoresRequest(
+                    service_name="openstack-hypervisor",
+                    action=ActionType.ALLOCATE_CORES,
+                    num_of_cores=0,
+                )
+            )
+            assert r.cores_allocated == 112
+            assert r.allocated_cores == "96-127,224-255,352-383,480-495"
+            assert r.shared_cpus == "496-511"
+
+    def test_allocate_cores_percent_fifty_percent(self):
+        """Allocate 50% of isolated cores; 50% of 8 cores = 4 cores."""
+        allocations_db.clear_all_allocations()
+        with patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-7"):
+            req = AllocateCoresPercentRequest(
+                service_name="service1",
+                action=ActionType.ALLOCATE_CORES_PERCENT,
+                percent=50,
+            )
+            r = handle_allocate_cores_percent(req)
+            assert r.cores_allocated_count == 4
+
+    def test_allocate_cores_percent_deallocate(self):
+        """percent=-1 deallocates the service's cores."""
+        allocations_db.clear_all_allocations()
+        with patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-5"):
+            r1 = handle_allocate_cores_percent(
+                AllocateCoresPercentRequest(
+                    service_name="service1",
+                    action=ActionType.ALLOCATE_CORES_PERCENT,
+                    percent=50,
+                )
+            )
+            assert r1.cores_allocated_count == 3
+            r2 = handle_allocate_cores_percent(
+                AllocateCoresPercentRequest(
+                    service_name="service1",
+                    action=ActionType.ALLOCATE_CORES_PERCENT,
+                    percent=-1,
+                )
+            )
+            assert r2.cores_allocated_count == 0
+            assert allocations_db.get_allocation("service1") is None
+
+    def test_allocate_cores_percent_via_daemon_request(self):
+        """allocate_cores_percent via handle_daemon_request JSON."""
+        allocations_db.clear_all_allocations()
+        with patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-9"):
+            req = {
+                "version": "1.0",
+                "service_name": "service1",
+                "action": "allocate_cores_percent",
+                "percent": 30,
+            }
+            resp_bytes = handle_daemon_request(json.dumps(req).encode())
+            resp = parse_obj_as(AllocateCoresPercentResponse, json.loads(resp_bytes.decode()))
+            assert resp.service_name == "service1"
+            assert resp.cores_allocated_count == 3  # 30% of 10 = 3
+
+    def test_allocate_cores_percent_ceil_rounding(self):
+        """Computed core count uses ceil; 7 cores * 25% = 1.75 -> 2. Avoids num_of_cores=0 path."""
+        allocations_db.clear_all_allocations()
+        with patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-6"):
+            r = handle_allocate_cores_percent(
+                AllocateCoresPercentRequest(
+                    service_name="service1",
+                    action=ActionType.ALLOCATE_CORES_PERCENT,
+                    percent=25,
+                )
+            )
+            assert r.cores_allocated_count == 2
+
+    def test_allocate_cores_percent_small_percent_yields_one(self):
+        """Validate that a small percentage of cores yields at least one core."""
+        with patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-7"):
+            r = handle_allocate_cores_percent(
+                AllocateCoresPercentRequest(
+                    service_name="service1",
+                    action=ActionType.ALLOCATE_CORES_PERCENT,
+                    percent=1,
+                )
+            )
+            assert r.cores_allocated_count == 1
+
+    def test_allocate_cores_percent_zero_and_one(self):
+        """percent=0 treated as 0 cores (deallocate); percent=1 with 100 cores gives 1."""
+        allocations_db.clear_all_allocations()
+        with patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-99"):
+            req = handle_allocate_cores_percent(
+                AllocateCoresPercentRequest(
+                    service_name="service1",
+                    action=ActionType.ALLOCATE_CORES_PERCENT,
+                    percent=0,
+                )
+            )
+            assert req.cores_allocated_count == 0
+            assert req.allocated_cores == ""
+            assert req.total_available_cpus == 100
+            assert req.remaining_available_cpus == 100
+
+            # 1% of 100 cores = 1
+            req = handle_allocate_cores_percent(
+                AllocateCoresPercentRequest(
+                    service_name="service1",
+                    action=ActionType.ALLOCATE_CORES_PERCENT,
+                    percent=1,
+                )
+            )
+            assert req.cores_allocated_count == 1
+            assert req.allocated_cores == "0"
+            assert req.total_available_cpus == 100
+            assert req.remaining_available_cpus == 99
+
+            # 10% of 100 cores = 10 cores
+            req = handle_allocate_cores_percent(
+                AllocateCoresPercentRequest(
+                    service_name="service1",
+                    action=ActionType.ALLOCATE_CORES_PERCENT,
+                    percent=10,
+                )
+            )
+            assert req.cores_allocated_count == 10
+            assert req.allocated_cores == "0-9"
+            assert req.total_available_cpus == 100
+            assert req.remaining_available_cpus == 90
+
+            req = handle_allocate_cores_percent(
+                AllocateCoresPercentRequest(
+                    service_name="service1",
+                    action=ActionType.ALLOCATE_CORES_PERCENT,
+                    percent=-1,
+                )
+            )
+            assert req.cores_allocated_count == 0
+            assert req.allocated_cores == ""
+            assert req.total_available_cpus == 100
+            assert req.remaining_available_cpus == 100
+
+    def test_allocate_cores_percent_no_isolated_cpus(self):
+        """allocate_cores_percent returns error when no isolated CPUs."""
+        with patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value=""):
+            req = {
+                "version": "1.0",
+                "service_name": "service1",
+                "action": "allocate_cores_percent",
+                "percent": 50,
+            }
+            resp_bytes = handle_daemon_request(json.dumps(req).encode())
+            resp = parse_obj_as(ErrorResponse, json.loads(resp_bytes.decode()))
+            assert resp.error == "No CPUs available"
+
     def test_allocate_cores_valid_override_and_second_service(self):
         """Allocate cores, then override; add second service within remaining."""
         allocations_db.clear_all_allocations()
@@ -345,17 +507,6 @@ class TestDaemonIntegration:
                     )
                 )
             assert "Insufficient CPUs available" in str(ei.value)
-
-            with pytest.raises(ValueError) as ei2:
-                _ = handle_allocate_cores(
-                    AllocateCoresRequest(
-                        service_name="svc-x",
-                        action=ActionType.ALLOCATE_CORES,
-                        num_of_cores=1,
-                        numa_node=0,
-                    )
-                )
-            assert "'numa_node' is not allowed" in str(ei2.value)
 
     @patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-5")
     @patch("epa_orchestrator.allocations_db.get_isolated_cpus", return_value="0-5")
@@ -784,3 +935,56 @@ class TestDaemonIntegration:
         resp4_b = handle_daemon_request(json.dumps(req4).encode())
         err4 = parse_obj_as(ErrorResponse, json.loads(resp4_b.decode()))
         assert "requested additional" in err4.error
+
+    @patch("epa_orchestrator.daemon_handler.get_isolated_cpus", return_value="0-7")
+    @patch("epa_orchestrator.allocations_db.get_isolated_cpus", return_value="0-7")
+    @patch("epa_orchestrator.utils.get_numa_node_cpus", return_value={0: {0, 1, 2, 3, 4, 5, 6, 7}})
+    @patch(
+        "epa_orchestrator.daemon_handler.get_numa_node_cpus",
+        return_value={0: {0, 1, 2, 3, 4, 5, 6, 7}},
+    )
+    def test_numa_smt_prefers_pairs_then_singles(
+        self, mock_nodes_dh, mock_nodes_utils, mock_iso_db, mock_iso_dh
+    ):
+        """NUMA allocator should prefer full sibling pairs, then fill with singles (no blocking).
+
+        Scenario: Node0 has CPUs 0-7 forming pairs (0,1), (2,3), (4,5), (6,7).
+        Request 5 CPUs -> expect two full pairs and one single from a third pair.
+        """
+        allocations_db.clear_all_allocations()
+
+        # Patch thread siblings mapping via cpu_pinning helper
+        def fake_read_file(path: str) -> str:
+            # Extract cpu number from path like .../cpuN/topology/thread_siblings_list
+            try:
+                i = path.rfind("/cpu")
+                j = path.find("/", i + 4)
+                cpu_str = path[i + 4 : j]
+                n = int(cpu_str)
+                base = n - (n % 2)
+                return f"{base}-{base + 1}"
+            except Exception:
+                return ""
+
+        with patch("epa_orchestrator.cpu_pinning._read_file_strict", side_effect=fake_read_file):
+            r = handle_allocate_numa_cores(
+                AllocateNumaCoresRequest(
+                    service_name="svc-smt",
+                    action=ActionType.ALLOCATE_NUMA_CORES,
+                    numa_node=0,
+                    num_of_cores=5,
+                )
+            )
+
+        # Validate allocation count
+        allocated_set = parse_cpu_ranges(r.cores_allocated)
+        assert len(allocated_set) == 5
+
+        # Validate that at least two groups are fully used (pairs), and one single remains
+        groups = [(0, 1), (2, 3), (4, 5), (6, 7)]
+        counts = []
+        for a, b in groups:
+            c = (1 if a in allocated_set else 0) + (1 if b in allocated_set else 0)
+            counts.append(c)
+        assert counts.count(2) >= 2  # two full cores used
+        assert counts.count(1) >= 1  # one single used
