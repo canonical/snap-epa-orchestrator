@@ -14,9 +14,12 @@ from unittest.mock import patch
 import pytest
 from pydantic import parse_obj_as
 
+from epa_orchestrator.allocations_db import allocations_db
 from epa_orchestrator.daemon_handler import handle_daemon_request
 from epa_orchestrator.schemas import (
     ActionType,
+    AllocateCoresPercentRequest,
+    AllocateCoresPercentResponse,
     AllocateCoresRequest,
     AllocateCoresResponse,
     ErrorResponse,
@@ -27,6 +30,12 @@ from epa_orchestrator.schemas import (
 
 class TestSocketCommunication:
     """Integration tests for socket communication with the daemon."""
+
+    @pytest.fixture(autouse=True)
+    def clear_allocations_db(self):
+        """Clear allocations DB before each test."""
+        allocations_db.clear_all_allocations()
+        yield
 
     @pytest.fixture
     def socket_path(self, tmp_path):
@@ -118,6 +127,171 @@ class TestSocketCommunication:
         response = parse_obj_as(AllocateCoresResponse, json.loads(response_data.decode()))
         assert response.service_name == "service1"
         assert response.cores_allocated == 1
+
+    @pytest.mark.parametrize(
+        "socket_daemon",
+        [patch_isolated_cpus_valid],
+        indirect=True,
+    )
+    def test_allocate_cores_percent_via_socket(self, socket_daemon, socket_path):
+        """Test allocating cores by percentage through socket communication."""
+        request = AllocateCoresPercentRequest(
+            service_name="service1",
+            action=ActionType.ALLOCATE_CORES_PERCENT,
+            percent=25,
+        )
+        # 25% of 8 cores (0-7) = 2 cores
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+            client.sendall(request.json().encode())
+            response_data = client.recv(4096)
+
+        response = parse_obj_as(AllocateCoresPercentResponse, json.loads(response_data.decode()))
+        assert response.service_name == "service1"
+        assert response.cores_allocated_count == 2
+        assert response.allocated_cores == "0-1"
+        assert response.total_available_cpus == 8
+        assert response.remaining_available_cpus == 6
+
+        # Verify idempotency by allocating again 90% of 8 cores (0-7) = 7.2, ceil -> 8
+        request = AllocateCoresPercentRequest(
+            service_name="service1",
+            action=ActionType.ALLOCATE_CORES_PERCENT,
+            percent=90,
+        )
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+            client.sendall(request.json().encode())
+            response_data = client.recv(4096)
+        response = parse_obj_as(AllocateCoresPercentResponse, json.loads(response_data.decode()))
+        assert response.service_name == "service1"
+        assert response.cores_allocated_count == 8
+        assert response.allocated_cores == "0-7"
+        assert response.total_available_cpus == 8
+        assert response.remaining_available_cpus == 0
+
+        # Allocate 40% of 8 cores (0-7) = 3.2, ceil -> 4
+        request = AllocateCoresPercentRequest(
+            service_name="service1",
+            action=ActionType.ALLOCATE_CORES_PERCENT,
+            percent=40,
+        )
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+            client.sendall(request.json().encode())
+            response_data = client.recv(4096)
+        response = parse_obj_as(AllocateCoresPercentResponse, json.loads(response_data.decode()))
+        assert response.service_name == "service1"
+        assert response.cores_allocated_count == 4
+        assert response.allocated_cores == "0-3"
+        assert response.total_available_cpus == 8
+        assert response.remaining_available_cpus == 4
+
+        # Allocate 100% of 8 cores (0-7) = 8 cores
+        request = AllocateCoresPercentRequest(
+            service_name="service1",
+            action=ActionType.ALLOCATE_CORES_PERCENT,
+            percent=100,
+        )
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+            client.sendall(request.json().encode())
+            response_data = client.recv(4096)
+        response = parse_obj_as(AllocateCoresPercentResponse, json.loads(response_data.decode()))
+        assert response.service_name == "service1"
+        assert response.cores_allocated_count == 8
+        assert response.allocated_cores == "0-7"
+        assert response.total_available_cpus == 8
+        assert response.remaining_available_cpus == 0
+
+    @pytest.mark.parametrize(
+        "socket_daemon",
+        [patch_isolated_cpus_valid],
+        indirect=True,
+    )
+    def test_allocate_cores_percent_multiple_services(self, socket_daemon, socket_path):
+        """Test allocating cores by percentage through socket communication."""
+        request = AllocateCoresPercentRequest(
+            service_name="service1",
+            action=ActionType.ALLOCATE_CORES_PERCENT,
+            percent=25,
+        )
+        # 25% of 8 cores (0-7) = 2 cores
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+            client.sendall(request.json().encode())
+            response_data = client.recv(4096)
+
+        response = parse_obj_as(AllocateCoresPercentResponse, json.loads(response_data.decode()))
+        assert response.service_name == "service1"
+        assert response.cores_allocated_count == 2
+        assert response.allocated_cores == "0-1"
+        assert response.total_available_cpus == 8
+        assert response.remaining_available_cpus == 6
+
+        # Verify remaining cores are allocated to service2
+        request = AllocateCoresPercentRequest(
+            service_name="service2",
+            action=ActionType.ALLOCATE_CORES_PERCENT,
+            percent=75,
+        )
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+            client.sendall(request.json().encode())
+            response_data = client.recv(4096)
+        response = parse_obj_as(AllocateCoresPercentResponse, json.loads(response_data.decode()))
+        assert response.service_name == "service2"
+        assert response.cores_allocated_count == 6
+        assert response.allocated_cores == "2-7"
+        assert response.total_available_cpus == 8
+        assert response.remaining_available_cpus == 0
+
+        # Verify no cores are available for service3
+        request = AllocateCoresPercentRequest(
+            service_name="service3",
+            action=ActionType.ALLOCATE_CORES_PERCENT,
+            percent=40,
+        )
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+            client.sendall(request.json().encode())
+            response_data = client.recv(4096)
+        response = parse_obj_as(ErrorResponse, json.loads(response_data.decode()))
+        assert response.error == "Insufficient CPUs available. Requested: 4, Available: 0"
+
+        # Deallocate service1
+        request = AllocateCoresPercentRequest(
+            service_name="service1",
+            action=ActionType.ALLOCATE_CORES_PERCENT,
+            percent=-1,
+        )
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+            client.sendall(request.json().encode())
+            response_data = client.recv(4096)
+        response = parse_obj_as(AllocateCoresPercentResponse, json.loads(response_data.decode()))
+        assert response.service_name == "service1"
+        assert response.cores_allocated_count == 0
+        assert response.allocated_cores == ""
+        assert response.total_available_cpus == 8
+        assert response.remaining_available_cpus == 2
+
+        # Verify service3 can allocate now
+        request = AllocateCoresPercentRequest(
+            service_name="service3",
+            action=ActionType.ALLOCATE_CORES_PERCENT,
+            percent=25,
+        )
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(socket_path)
+            client.sendall(request.json().encode())
+            response_data = client.recv(4096)
+        response = parse_obj_as(AllocateCoresPercentResponse, json.loads(response_data.decode()))
+        assert response.service_name == "service3"
+        assert response.cores_allocated_count == 2
+        assert response.allocated_cores == "0-1"
+        assert response.total_available_cpus == 8
+        assert response.remaining_available_cpus == 0
 
     @pytest.mark.parametrize(
         "socket_daemon",
