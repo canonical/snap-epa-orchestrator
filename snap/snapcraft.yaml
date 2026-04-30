@@ -1,6 +1,7 @@
 name: epa-orchestrator
-base: core24
-version: "2025.1"
+base: core26
+build-base: devel
+version: "2026.1"
 license: Apache-2.0
 summary: NUMA-aware CPU and hugepage resource orchestrator for snaps
 source-code:
@@ -22,13 +23,17 @@ description: |
     - Persistent state with atomic writes and file locking
     - Secure local-only Unix socket API with versioned JSON protocol
 
-grade: stable
+grade: devel
 confinement: strict
 
 apps:
   daemon:
     command: "bin/daemon"
     daemon: simple
+    environment:
+      # uv installs packages into lib/python3.14/site-packages; add to
+      # PYTHONPATH so that #!/usr/bin/env python3 finds them at runtime.
+      PYTHONPATH: $SNAP/lib/python3.14/site-packages
     plugs:
       - network-bind
       - sys-devices-system-node
@@ -48,11 +53,21 @@ parts:
       "*": bin/
 
   epa-orchestrator:
-    plugin: python
+    plugin: uv
     source: .
-    python-packages:
-      - pydantic
-      - .
+    build-snaps:
+      - astral-uv
+    build-packages:
+      - libffi-dev
+    build-environment:
+      - PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+    stage-packages:
+      - python3-venv
+    override-prime: |
+      craftctl default
+      # Remove dangling venv symlinks pointing into the build directory.
+      rm -f $CRAFT_PRIME/bin/python
+      rm -f $CRAFT_PRIME/bin/python3.14
 
   logrotate:
     plugin: nil

@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "epa-orchestrator"
-version = "2025.1"
+version = "2026.1"
 requires-python = ">=3.10"
 license-files = ["LICENSE"]
 description = "Introspection service"
@@ -26,14 +26,12 @@ classifiers = [
     "Operation System :: POSIX :: Linux",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.14",
 ]
 
 dependencies = [
     "pydantic",
-    "cryptography>=38.0.0,<42,!=40.0.0,!=40.0.1",  # PyOpenSSL requirements
+    "cryptography>=38.0.0,!=40.0.0,!=40.0.1",  # PyOpenSSL requirements
 ]
 
 [project.optional-dependencies]
@@ -67,7 +65,7 @@ log_cli_level = "INFO"
 # Formatting tools configuration
 [tool.black]
 line-length = 99
-target-version = ["py38"]
+target-version = ["py310"]
 
 [tool.isort]
 profile = "black"
@@ -103,7 +101,7 @@ copyright-regexp = "(?i)# SPDX-FileCopyrightText:\\s\\d{4}(-(\\d{4}|present))*"
 #copyright-regexp = "Copyright\\s\\d{4}([-,]\\d{4})*\\s+%(author)s"
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.14"
 ignore_missing_imports = true
 strict = true
 show_error_codes = true
