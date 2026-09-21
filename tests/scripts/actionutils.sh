@@ -30,11 +30,7 @@ function install_snap() {
         echo "ERROR: No snap file found"
         return 1
     fi
-    # core26 is not yet in stable; pre-install it from edge so that
-    # --dangerous installs of core26-based snaps resolve their base.
-    sudo snap install core26 --channel=latest/edge || true
     sudo snap install --dangerous "$SNAP_FILE"
-    sudo snap connect $SERVICE_NAME:network-bind
 }
 
 function wait_for_container_running() {
@@ -122,8 +118,8 @@ function setup_lxd_cluster() {
     BASENAME=$(basename "$SNAP_FILE")
 
     cleanup_lxd_nodes
-    sudo lxc launch ubuntu:22.04 node1 || true
-    sudo lxc launch ubuntu:22.04 node2 || true
+    sudo lxc launch ubuntu-daily:26.10 node1 || true
+    sudo lxc launch ubuntu-daily:26.10 node2 || true
 
     wait_for_container_running node1 || return 1
     wait_for_container_running node2 || return 1
@@ -134,9 +130,7 @@ function setup_lxd_cluster() {
     for node in node1 node2; do
         echo "Setting up $node..."
         sudo lxc file push "$SNAP_FILE" $node/root/
-        sudo lxc exec $node -- snap install core26 --channel=latest/edge || true
         sudo lxc exec $node -- snap install --dangerous /root/"$BASENAME"
-        sudo lxc exec $node -- snap connect $SERVICE_NAME:network-bind
         sudo lxc file push ~/actionutils.sh $node/root/actionutils.sh --mode=755
         sudo lxc file push -r ~/scripts $node/root/
         echo "$node setup complete"
