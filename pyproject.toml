@@ -31,7 +31,7 @@ classifiers = [
 
 dependencies = [
     "pydantic",
-    "cryptography>=38.0.0,!=40.0.0,!=40.0.1",  # PyOpenSSL requirements
+    "cryptography!=40.0.0,!=40.0.1,>=46.0.7",  # PyOpenSSL requirements
 ]
 
 [project.optional-dependencies]
