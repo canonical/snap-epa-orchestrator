@@ -45,6 +45,12 @@ apps:
     daemon: oneshot
     timer: 00:00
 
+hooks:
+  configure:
+    # Validates new general cpu-pool settings and transactionally records the accepted pool.
+    environment:
+      PYTHONPATH: $SNAP/lib/python3.14/site-packages
+
 parts:
   snap-version:
     plugin: nil
