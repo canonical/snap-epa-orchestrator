@@ -210,7 +210,7 @@ def test_invalid_saved_pool_metadata_is_not_treated_as_isolated(pools, metadata)
 
 
 def test_hook_validates_claims_per_pool_and_rejects_overlap(pools, snap_pool_options):
-    """General reconfiguration neither excludes isolated owners nor permits overlapping IDs."""
+    """General reconfiguration cannot exclude general owners or overlap isolated CPUs."""
     api(pools, "allocate_cores", num_of_cores=1)
     api(pools, "allocate_cores", service="ceph", pool="general", num_of_cores=2)
     snap_pool_options["cpu-pool"] = "2-5"
@@ -309,3 +309,54 @@ def test_concurrent_pool_requests_cannot_split_one_service(pools):
     assert len(stored) == 1
     assert stored[0].pool == granted[0]["pool"]
     assert stored[0].allocated_cores == granted[0]["allocated_cores"]
+
+
+def test_hook_replays_accepted_pool_despite_claim_before_restart(pools, snap_pool_options):
+    """Refresh must not roll back over a claim the old daemon granted after narrowing."""
+    running = CpuPools("2-7")
+    snap_pool_options["cpu-pool"] = "2-5"
+    validate_snap_configuration()
+    assert (
+        api(running, "allocate_cores", service="late", pool="general", num_of_cores=6)[
+            "allocated_cores"
+        ]
+        == "2-7"
+    )
+    before = allocations_db._state_store.read_all()
+    validate_snap_configuration()
+    assert snap_pool_options["internal.validated-cpu-pool"] == "2-5"
+    assert allocations_db._state_store.read_all() == before
+    # Changed input is still checked against every general owner.
+    snap_pool_options["cpu-pool"] = "2-6"
+    with pytest.raises(ValueError, match="excludes allocated CPUs: 7"):
+        validate_snap_configuration()
+    assert snap_pool_options["internal.validated-cpu-pool"] == "2-5"
+    # Startup retains the claim and blocks new general grants, but release still works.
+    snap_pool_options["cpu-pool"] = "2-5"
+    restarted = load_startup_pool()
+    for service in ("late", "other"):
+        result = api(restarted, "allocate_cores", service=service, pool="general", num_of_cores=1)
+        assert "excludes allocated CPUs: 6-7" in result["error"]
+    assert "error" not in api(
+        restarted, "allocate_cores", service="late", pool="general", num_of_cores=-1
+    )
+    assert allocations_db.get_allocation("late") is None
+
+
+def test_hook_replays_accepted_pool_after_isolation_changes(
+    pools, snap_pool_options, mock_cpu_files_empty
+):
+    """Kernel isolation drift is handled at startup, not by failing unrelated hooks."""
+    api(pools, "allocate_cores", num_of_cores=1)
+    snap_pool_options["cpu-pool"] = "2-5"
+    validate_snap_configuration()
+    # Across reboot, the isolated owner falls outside isolation and general overlaps it.
+    mock_cpu_files_empty["isolated"].write_text("2-3")
+    validate_snap_configuration()
+    assert allocations_db.get_allocation("owner") == "8"
+    snap_pool_options["cpu-pool"] = "2-6"
+    with pytest.raises(ValueError, match="overlaps isolated"):
+        validate_snap_configuration()
+    snap_pool_options["cpu-pool"] = "4-6"
+    validate_snap_configuration()
+    assert snap_pool_options["internal.validated-cpu-pool"] == "4-6"

@@ -159,9 +159,11 @@ claims exist: those binaries cannot enforce this ownership boundary.
 ### Topology changes and recovery
 
 The configure hook checks new general-pool settings against present topology and
-rejects settings that exclude existing general owners, even offline ones. Isolated
-owners are validated against the isolated pool separately. An unchanged accepted
-setting survives refresh even if CPUs disappear. The hook maintains
+rejects settings that exclude existing general owners, even offline ones, or that
+overlap isolated CPUs. `cpu-pool` does not define the isolated pool, so the hook
+does not validate isolated owners. An unchanged accepted setting is not re-validated,
+so refresh and unrelated `snap set` calls succeed even if CPUs disappear, isolation
+changes, or conflicting claims exist; startup reports those. The hook maintains
 `internal.validated-cpu-pool` within the same snap configuration transaction;
 this is internal bookkeeping, not an operator setting.
 

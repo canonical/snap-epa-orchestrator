@@ -234,24 +234,27 @@ def validate_snap_configuration() -> None:
             # Only new input requires present CPUs. Refresh can replay an accepted
             # pool after hardware disappears; startup retains those IDs as unavailable.
             parse_cpu_list(configuration, read_cpu_list(cpu_pinning.PRESENT_CPUS_PATH))
+    if normalized == accepted:
+        # Refresh and unrelated snap set replay an accepted pool. Isolation changes
+        # or claims granted before the daemon restarted may now conflict with it;
+        # startup retains those claims and blocks conflicting grants instead.
+        return
     pools = CpuPools(configuration)
-    for pool in CpuPoolName:
-        claimed = allocations_db.get_claimed_cpus(pool)
-        if pool == CpuPoolName.GENERAL and pools.general is None and not claimed:
-            continue
-        pools.select(pool).validate_claims(claimed)
-    if normalized != accepted:
-        # snapctl writes join the configure-hook transaction, so failed changes
-        # cannot replace the last accepted pool. Do not use a separate state file.
-        try:
-            subprocess.run(
-                ["snapctl", "set", f"{VALIDATED_POOL_OPTION}={json.dumps(normalized)}"],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except (OSError, subprocess.CalledProcessError) as exc:
-            raise ValueError(f"Failed to record validated cpu-pool configuration: {exc}") from exc
+    # cpu-pool only defines the general pool; isolated membership comes from the kernel.
+    claimed = allocations_db.get_claimed_cpus(CpuPoolName.GENERAL)
+    if pools.general is not None or claimed:
+        pools.select(CpuPoolName.GENERAL).validate_claims(claimed)
+    # snapctl writes join the configure-hook transaction, so failed changes
+    # cannot replace the last accepted pool. Do not use a separate state file.
+    try:
+        subprocess.run(
+            ["snapctl", "set", f"{VALIDATED_POOL_OPTION}={json.dumps(normalized)}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ValueError(f"Failed to record validated cpu-pool configuration: {exc}") from exc
 
 
 def main() -> None:
