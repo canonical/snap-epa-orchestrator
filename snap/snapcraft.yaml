@@ -1,6 +1,6 @@
 name: epa-orchestrator
 base: core26
-version: "2026.1"
+version: "2026.2"
 adopt-info: snap-version
 license: Apache-2.0
 summary: NUMA-aware CPU and hugepage resource orchestrator for snaps
