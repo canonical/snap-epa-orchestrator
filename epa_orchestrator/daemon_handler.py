@@ -155,6 +155,8 @@ def _allocate_cores(
     db: AllocationsDB,
     provider: CpuPoolProvider,
     pool: CpuPoolSnapshot,
+    *,
+    default_placement: CpuPlacement | None = CpuPlacement.FEWEST_L3,
 ) -> AllocateCoresResponse:
     """Build a response from the candidate which must be committed before success."""
     db.ensure_service_pool(request.service_name, request.pool)
@@ -178,13 +180,14 @@ def _allocate_cores(
             remaining_available_cpus=stats["remaining_available_cpus"],
         )
 
+    placement = request.placement
+    if placement is None and request.num_of_cores > 0:
+        placement = default_placement
     provider.validate_claims(db.get_claimed_cpus(request.pool))
-    if not pool.eligible_cpus and request.placement != CpuPlacement.SINGLE_L3:
+    if not pool.eligible_cpus and placement != CpuPlacement.SINGLE_L3:
         raise ValueError("No CPUs available")
 
-    topology = _get_l3_topology(
-        provider, pool, required=request.placement == CpuPlacement.SINGLE_L3
-    )
+    topology = _get_l3_topology(provider, pool, required=placement == CpuPlacement.SINGLE_L3)
     num_of_cores = request.num_of_cores or 0
     shared, dedicated = db.allocate_count(
         request.service_name,
@@ -193,7 +196,11 @@ def _allocate_cores(
         request.preemption_policy,
         check_online=provider.check_online,
         pool=request.pool,
-        placement=(request.placement, topology) if request.placement and topology else None,
+        placement=(
+            (placement, topology)
+            if placement and placement != CpuPlacement.LEGACY and topology
+            else None
+        ),
     )
 
     updated_stats = db.get_system_stats(eligible)
@@ -205,7 +212,7 @@ def _allocate_cores(
         num_of_cores=num_of_cores,
         cores_allocated=cores_allocated,
         allocated_cores=dedicated,
-        placement=request.placement,
+        placement=placement,
         l3_groups=topology.claim_groups(dedicated) if topology else None,
         preemption_policy=db.get_preemption_policy(request.service_name),
         shared_cpus=shared,
@@ -258,7 +265,7 @@ def _allocate_cores_percent(
         num_of_cores=num_of_cores,
         preemption_policy=request.preemption_policy,
     )
-    result = _allocate_cores(core_req, db, provider, snapshot)
+    result = _allocate_cores(core_req, db, provider, snapshot, default_placement=None)
     return AllocateCoresPercentResponse(
         version=result.version,
         pool=result.pool,
@@ -332,13 +339,12 @@ def _allocate_numa_cores(
             remaining_available_cpus=updated_stats["remaining_available_cpus"],
         )
 
+    placement = request.placement or CpuPlacement.FEWEST_L3
     provider.validate_claims(db.get_claimed_cpus(request.pool))
-    if request.placement != CpuPlacement.SINGLE_L3:
+    if placement != CpuPlacement.SINGLE_L3:
         _validate_numa_capacity(request, pool, numa_cpus[request.numa_node])
 
-    topology = _get_l3_topology(
-        provider, pool, required=request.placement == CpuPlacement.SINGLE_L3
-    )
+    topology = _get_l3_topology(provider, pool, required=placement == CpuPlacement.SINGLE_L3)
     allocated_cores, unavailable = db.allocate_numa_cores(
         request.service_name,
         request.numa_node,
@@ -347,7 +353,11 @@ def _allocate_numa_cores(
         eligible_cpus=pool.eligible_cpus,
         check_online=provider.check_online,
         pool=request.pool,
-        placement=(request.placement, topology) if request.placement and topology else None,
+        placement=(
+            (placement, topology)
+            if placement and placement != CpuPlacement.LEGACY and topology
+            else None
+        ),
     )
 
     if not allocated_cores:
@@ -365,7 +375,7 @@ def _allocate_numa_cores(
         numa_node=request.numa_node,
         num_of_cores=request.num_of_cores,
         cores_allocated=allocated_cores,
-        placement=request.placement,
+        placement=placement,
         l3_groups=topology.claim_groups(allocated_cores) if topology else None,
         preemption_policy=db.get_preemption_policy(request.service_name),
         total_available_cpus=stats["total_available_cpus"],

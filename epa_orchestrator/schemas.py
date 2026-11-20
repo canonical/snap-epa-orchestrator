@@ -22,6 +22,7 @@ class CpuPlacement(str, Enum):
 
     SINGLE_L3 = "single_l3"
     FEWEST_L3 = "fewest_l3"
+    LEGACY = "legacy"
 
 
 class PreemptionPolicy(str, Enum):

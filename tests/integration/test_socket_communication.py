@@ -374,7 +374,7 @@ class TestSocketCommunication:
             "pool": "general",
             "num_of_cores": 2,
         }
-        ordinary = json.loads(_exchange(socket_path, request))
+        ordinary = json.loads(_exchange(socket_path, {**request, "placement": "legacy"}))
         assert ordinary["l3_groups"] == ["0", "1"]
         released = json.loads(_exchange(socket_path, {**request, "num_of_cores": -1}))
         assert "error" not in released, released

@@ -106,10 +106,10 @@ def test_wire_discovery_and_grouped_claims(bergamo):
         "partial": False,
     }
 
-    legacy = api(bergamo, "allocate_cores", "legacy", num_of_cores=4)
+    legacy = api(bergamo, "allocate_cores", "legacy", num_of_cores=4, placement="legacy")
     assert legacy["allocated_cores"] == "6-9"
     assert legacy["l3_groups"] == ["6-7", "8-9"]
-    assert legacy["placement"] is None
+    assert legacy["placement"] == "legacy"
     percent = api(bergamo, "allocate_cores_percent", "percent", percent=1)
     assert percent["l3_groups"] == ["10"]
 
@@ -409,3 +409,35 @@ def test_strict_placement_reports_unreadable_online_mask(
     assert result["code"] == "l3_topology_unavailable"
     assert str(mock_cpu_files_empty["online"]) in result["error"]
     assert allocations_db._state_store.read_all() == before
+
+
+@pytest.mark.parametrize(
+    "action,params,field",
+    [
+        ("allocate_cores", {}, "allocated_cores"),
+        ("allocate_numa_cores", {"numa_node": 0}, "cores_allocated"),
+    ],
+)
+def test_positive_grants_default_to_fewest_l3(topology, action, params, field):
+    """Omitted placement packs interleaved CPUs for both positive grant APIs."""
+    pools = topology([{0, 2, 4, 6}, {1, 3, 5, 7}])
+    result = api(pools, action, num_of_cores=4, **params)
+    assert result["placement"] == "fewest_l3"
+    assert result[field] == "0,2,4,6"
+    assert result["l3_groups"] == ["0,2,4,6"]
+    api(pools, action, num_of_cores=-1, **params)
+    legacy = api(pools, action, num_of_cores=4, placement="legacy", **params)
+    assert legacy["placement"] == "legacy"
+    assert legacy[field] == "0-3"
+
+
+def test_percentage_and_default_size_keep_original_selection(topology):
+    """The placement default applies only to explicit positive-count grants."""
+    pools = topology([{0, 2, 4, 6}, {1, 3, 5, 7}])
+    percent = api(pools, "allocate_cores_percent", percent=50)
+    assert percent["allocated_cores"] == "0-3"
+    assert "placement" not in percent
+    api(pools, "allocate_cores", num_of_cores=-1)
+    heuristic = api(pools, "allocate_cores", num_of_cores=0)
+    assert heuristic["allocated_cores"] == "0-5"
+    assert heuristic.get("placement") is None

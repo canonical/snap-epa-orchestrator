@@ -177,12 +177,13 @@ mode. Older daemons can silently ignore the field.
   It prefers groups that need the fewest CPUs from other claims, then the
   smallest fitting group. It returns `l3_no_group_fits` when none fit, or
   `l3_topology_unavailable` when cache topology cannot be read.
-- `fewest_l3` uses the same placement when one group fits. For larger grants,
+- `fewest_l3` is the default for positive-count and NUMA grants. It uses the same placement when one group fits. For larger grants,
   it minimizes the number of L3 groups, preferring fewer NUMA nodes where
   topology permits. Within a requested NUMA node, it then minimizes the
   number of CPUs reclaimed from other claims. If L3 topology cannot be read,
   it uses ordinary selection.
-- Both modes work on positive-count and NUMA requests. A NUMA request covers
+- Set `"placement": "legacy"` on a positive-count or NUMA request to use the
+  original selection policy. A NUMA request covers
   the selected node only. Percentage requests must omit `placement` entirely,
   including when its value would be `null`. A placement mode on a default-size
   request returns `placement_not_supported`. Count and NUMA releases ignore placement.
@@ -191,7 +192,7 @@ mode. Older daemons can silently ignore the field.
   that use that many caches. Strict placement returns `l3_growth_would_spill` if an
   existing group cannot accommodate growth and `l3_claim_spans_groups` if the
   current claim already spans groups. These errors leave claims intact.
-  Placement applies per request, so send the mode again on subsequent resizes.
+  Placement applies per request. Send `single_l3` again for a strict resize.
 
 Allocation responses include `l3_groups`, an array of CPU range strings, one
 per shared L3 cache involved in the claim. A `null` value
