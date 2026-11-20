@@ -96,3 +96,45 @@ def test_configured_pool_success(socket_path, configured_pool, action, params, f
     assert all(entry.get("pool") == "general" for entry in listing["allocations"]), listing
     owner = next(e for e in listing["allocations"] if e["service_name"] == "test-configured-pool")
     assert _ids(owner["allocated_cores"]) == selected
+
+
+def test_strict_snap_l3_placement(socket_path, configured_pool):
+    """Read real kernel cache topology and place CPUs through the confined daemon."""
+    online = _ids(Path("/sys/devices/system/cpu/online").read_text().strip())
+    kernel_groups = set()
+    for cpu in configured_pool:
+        cache = Path(f"/sys/devices/system/cpu/cpu{cpu}/cache")
+        entry = next(
+            (
+                index
+                for index in cache.glob("index*")
+                if (index / "level").read_text().strip() == "3"
+                and (index / "type").read_text().strip() == "Unified"
+            ),
+            None,
+        )
+        if entry is None:
+            pytest.skip(f"Guest CPU {cpu} exposes no unified L3 cache")
+        kernel_groups.add(frozenset(_ids((entry / "shared_cpu_list").read_text().strip())))
+    expected = {
+        frozenset(group & configured_pool): bool((group & online) - configured_pool)
+        for group in kernel_groups
+    }
+    listing = _request(socket_path, "list_allocations", pool="general")
+    assert "l3-placement" in listing["supported_cpu_features"], listing
+    observed = {
+        frozenset(_ids(group["cpus"])): group["partial"] for group in listing["l3_topology"]
+    }
+    assert observed == expected
+
+    response = _request(
+        socket_path,
+        "allocate_cores",
+        pool="general",
+        num_of_cores=1,
+        placement="single_l3",
+        preemption_policy="non-preemptive",
+    )
+    assert response.get("placement") == "single_l3", response
+    assert response["l3_groups"] == [response["allocated_cores"]]
+    assert _ids(response["allocated_cores"]) <= configured_pool

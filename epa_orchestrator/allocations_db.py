@@ -22,10 +22,12 @@ from .cpu_pinning import (
     calculate_cpu_pinning,
     get_thread_siblings_map,
 )
-from .schemas import CpuPoolName, PreemptionPolicy, SnapAllocation
+from .l3_topology import L3Topology, PlacementError, choose_group, pack_groups
+from .schemas import CpuPlacement, CpuPoolName, PreemptionPolicy, SnapAllocation
 from .state_store import StateCorruptionError, StateStore
 from .utils import (
     get_cpus_in_numa_node,
+    get_numa_node_cpus,
     parse_cpu_ranges,
     to_ranges,
 )
@@ -329,16 +331,36 @@ class AllocationsDB:
         *,
         pool: CpuPoolName = CpuPoolName.ISOLATED,
         check_online: Callable[[AbstractSet[int]], None],
+        placement: Optional[tuple[CpuPlacement, L3Topology]] = None,
     ) -> tuple[str, str]:
         """Select and commit ordinary CPUs with capacity validation under the state lock."""
         self.ensure_service_pool(service_name, pool)
         policy = self._effective_policy(service_name, preemption_policy)
         candidates = set(self.get_available_cpus_for_service(service_name, eligible_cpus))
         self._check_offline_claims(service_name, self._parse_cpu_ranges(eligible_cpus))
-        if count > len(candidates):
+        strict = placement is not None and placement[0] == CpuPlacement.SINGLE_L3
+        if count > len(candidates) and not strict:
             raise ValueError(
                 f"Insufficient CPUs available. Requested: {count}, Available: {len(candidates)}"
             )
+        if placement is not None:
+            own = self._get_service_allocation_set(service_name) & candidates
+            target_count = count
+            selected = self._select_l3_cpus(placement, candidates, own, count, policy)
+            dedicated = to_ranges(sorted(selected))
+            shared = to_ranges(sorted(candidates - selected))
+        else:
+            target_count, selected, shared, dedicated = self._select_count(
+                service_name, candidates, count, policy
+            )
+        self._validate_selection(selected, candidates, target_count)
+        check_online(selected)
+        self.allocate_cores(service_name, dedicated, policy, pool=pool)
+        return shared, dedicated
+
+    def _select_count(
+        self, service_name: str, candidates: set[int], count: int, policy: PreemptionPolicy
+    ) -> tuple[int, set[int], str, str]:
         shared, dedicated = calculate_cpu_pinning(to_ranges(sorted(candidates)), count)
         if not dedicated:
             raise ValueError(f"Failed to allocate {count} cores")
@@ -348,10 +370,7 @@ class AllocationsDB:
             selected = self._select_stable(service_name, candidates, target_count)
             dedicated = to_ranges(sorted(selected))
             shared = to_ranges(sorted(candidates - selected))
-        self._validate_selection(selected, candidates, target_count)
-        check_online(selected)
-        self.allocate_cores(service_name, dedicated, policy, pool=pool)
-        return shared, dedicated
+        return target_count, selected, shared, dedicated
 
     def _check_offline_claims(self, service_name: str, eligible: AbstractSet[int]) -> None:
         if self._get_service_allocation_set(service_name) - eligible:
@@ -361,10 +380,118 @@ class AllocationsDB:
 
     def _select_stable(self, service_name: str, candidates: set[int], count: int) -> set[int]:
         own = self._get_service_allocation_set(service_name) & candidates
-        retained = set(sorted(own)[:count])
-        if len(retained) == count:
-            return retained
-        return retained | self._select_numa_cpus_smt_aware(candidates - own, count - len(retained))
+        if count <= len(own):
+            return self._shrink_claim(own, count)
+        return own | self._select_numa_cpus_smt_aware(candidates - own, count - len(own))
+
+    def _shrink_claim(self, own: set[int], count: int) -> set[int]:
+        if count == len(own):
+            return own
+        if count == 1:
+            return {min(own)}
+        return self._select_numa_cpus_smt_aware(own, count)
+
+    def _select_l3_cpus(
+        self,
+        placement: tuple[CpuPlacement, L3Topology],
+        candidates: set[int],
+        own: set[int],
+        count: int,
+        policy: PreemptionPolicy,
+    ) -> set[int]:
+        """Place an exact claim, preserving protected CPUs before considering new groups."""
+        mode, topology = placement
+        retained = own if policy == PreemptionPolicy.NON_PREEMPTIVE else set()
+        if mode == CpuPlacement.FEWEST_L3 and count < len(retained):
+            # A shrink can drop entire groups using only CPUs already owned.
+            candidates = retained
+            retained = set()
+        groups = [candidates.intersection(group) for group in topology.groups]
+        groups = [group for group in groups if group]
+        current = [group for group in groups if group & retained]
+        if mode == CpuPlacement.SINGLE_L3:
+            return self._select_single_l3(groups, current, retained, own, count)
+        return self._select_fewest_l3(groups, current, retained, own, count)
+
+    def _select_single_l3(
+        self,
+        groups: list[set[int]],
+        current: list[set[int]],
+        retained: set[int],
+        own: set[int],
+        count: int,
+    ) -> set[int]:
+        if len(current) > 1:
+            raise PlacementError(
+                "l3_claim_spans_groups", "Existing claim spans L3 groups. Release it first."
+            )
+        if current:
+            if count <= len(retained):
+                return self._shrink_claim(retained, count)
+            if count > len(current[0]):
+                raise PlacementError(
+                    "l3_growth_would_spill",
+                    f"Existing L3 group can hold only {len(current[0])} eligible CPUs "
+                    f"for this claim, but {count} were requested",
+                )
+            return retained | self._select_numa_cpus_smt_aware(
+                current[0] - retained, count - len(retained)
+            )
+
+        group = choose_group(groups, count, own | (set().union(*groups) - self._allocated_cpus))
+        if not group:
+            largest = max(map(len, groups), default=0)
+            raise PlacementError(
+                "l3_no_group_fits",
+                f"No L3 group fits {count} CPUs. Largest available count in one group: {largest}",
+            )
+        return self._select_with_reclamation(group, own, count)
+
+    def _select_fewest_l3(
+        self,
+        groups: list[set[int]],
+        current: list[set[int]],
+        retained: set[int],
+        own: set[int],
+        count: int,
+    ) -> set[int]:
+        if count <= len(retained):
+            return self._shrink_claim(retained, count)
+
+        candidates = set().union(*groups)
+        if not retained:
+            group = choose_group(groups, count, own | (candidates - self._allocated_cpus))
+            if group:
+                return self._select_with_reclamation(group, own, count)
+
+        # Exhaust candidates in existing groups before opening another group.
+        room = set().union(*current) - retained
+        needed = count - len(retained)
+        if needed <= len(room):
+            return retained | self._select_numa_cpus_smt_aware(room, needed)
+        selected = retained | room
+        try:
+            numa_cpus = get_numa_node_cpus()
+        except ValueError:
+            numa_cpus = {}
+        added = pack_groups(
+            [group for group in groups if group not in current],
+            count - len(selected),
+            numa_cpus,
+            selected,
+        )
+        return selected | self._select_with_reclamation(
+            set().union(*added), own, count - len(selected)
+        )
+
+    def _select_with_reclamation(
+        self, candidates: set[int], own: set[int], count: int
+    ) -> set[int]:
+        """Use SMT preferences within each tier, reclaiming only the shortfall."""
+        free = candidates - (self._allocated_cpus - own)
+        if len(free) >= count:
+            return self._select_numa_cpus_smt_aware(free, count)
+        return free | self._select_numa_cpus_smt_aware(candidates - free, count - len(free))
 
     def _validate_selection(self, selected: set[int], candidates: set[int], count: int) -> None:
         """Reject a short or invalid selector result before changing ownership."""
@@ -482,6 +609,7 @@ class AllocationsDB:
         pool: CpuPoolName = CpuPoolName.ISOLATED,
         eligible_cpus: AbstractSet[int],
         check_online: Callable[[AbstractSet[int]], None],
+        placement: Optional[tuple[CpuPlacement, L3Topology]] = None,
     ) -> Tuple[str, str]:
         """Select exactly the requested node capacity, or release that owner's node claims."""
         self.ensure_service_pool(service_name, pool)
@@ -498,13 +626,16 @@ class AllocationsDB:
         candidates, rejected = self._get_allocatable_numa_cpus(
             service_name, numa_node, eligible_cpus, policy, pool
         )
-        if len(candidates) < num_of_cores:
+        strict = placement is not None and placement[0] == CpuPlacement.SINGLE_L3
+        if len(candidates) < num_of_cores and not strict:
             return "", to_ranges(sorted(rejected))
-        selected = (
-            self._select_stable(service_name, candidates, num_of_cores)
-            if policy == PreemptionPolicy.NON_PREEMPTIVE
-            else self._select_numa_cpus_smt_aware(candidates, num_of_cores)
-        )
+        if placement is not None:
+            own = self._get_service_allocation_set(service_name) & candidates
+            selected = self._select_l3_cpus(placement, candidates, own, num_of_cores, policy)
+        elif policy == PreemptionPolicy.NON_PREEMPTIVE:
+            selected = self._select_stable(service_name, candidates, num_of_cores)
+        else:
+            selected = self._select_numa_cpus_smt_aware(candidates, num_of_cores)
         self._validate_selection(selected, candidates, num_of_cores)
         self._apply_numa_explicit_allocation(
             service_name,

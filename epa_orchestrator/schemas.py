@@ -17,6 +17,13 @@ class CpuPoolName(str, Enum):
     GENERAL = "general"
 
 
+class CpuPlacement(str, Enum):
+    """L3 placement constraints for one CPU grant."""
+
+    SINGLE_L3 = "single_l3"
+    FEWEST_L3 = "fewest_l3"
+
+
 class PreemptionPolicy(str, Enum):
     """Ownership protection, independent of NUMA placement and scheduler preemption."""
 
@@ -42,6 +49,7 @@ class AllocateCoresRequest(BaseModel):
     version: Literal["1.0"] = Field(default=API_VERSION)
     action: Literal[ActionType.ALLOCATE_CORES]
     preemption_policy: Optional[PreemptionPolicy] = None
+    placement: Optional[CpuPlacement] = None
     service_name: str = Field(description="Name of the requesting service")
     num_of_cores: int = Field(
         default=0,
@@ -56,6 +64,7 @@ class AllocateCoresPercentRequest(BaseModel):
     version: Literal["1.0"] = Field(default=API_VERSION)
     action: Literal[ActionType.ALLOCATE_CORES_PERCENT]
     preemption_policy: Optional[PreemptionPolicy] = None
+    placement: object = None
     service_name: str = Field(description="Name of the requesting service")
     percent: int = Field(
         ge=-1,
@@ -89,6 +98,7 @@ class AllocateNumaCoresRequest(BaseModel):
     version: Literal["1.0"] = Field(default=API_VERSION)
     action: Literal[ActionType.ALLOCATE_NUMA_CORES]
     preemption_policy: Optional[PreemptionPolicy] = None
+    placement: Optional[CpuPlacement] = None
     service_name: str = Field(description="Name of the requesting service")
     numa_node: int = Field(ge=0, description="NUMA node to allocate cores from")
     num_of_cores: int = Field(description="Number of cores to allocate (-1 to deallocate)")
@@ -151,6 +161,8 @@ class AllocateCoresResponse(BaseModel):
     pool: CpuPoolName = CpuPoolName.ISOLATED
     version: Literal["1.0"] = Field(default=API_VERSION)
     preemption_policy: Optional[PreemptionPolicy] = None
+    placement: Optional[CpuPlacement] = None
+    l3_groups: Optional[List[str]] = None
     service_name: str = Field(description="Name of the service that was allocated cores")
     num_of_cores: int = Field(description="Number of cores that were requested")
     cores_allocated: int = Field(description="Number of cores that were actually allocated")
@@ -168,6 +180,8 @@ class AllocateCoresPercentResponse(BaseModel):
     pool: CpuPoolName = CpuPoolName.ISOLATED
     version: Literal["1.0"] = Field(default=API_VERSION)
     preemption_policy: Optional[PreemptionPolicy] = None
+    placement: Optional[CpuPlacement] = None
+    l3_groups: Optional[List[str]] = None
     service_name: str = Field(description="Name of the service that was allocated cores")
     cores_allocated_count: int = Field(description="Number of cores that were actually allocated")
     allocated_cores: str = Field(description="Comma-separated list of allocated CPU ranges")
@@ -183,6 +197,8 @@ class AllocateNumaCoresResponse(BaseModel):
     pool: CpuPoolName = CpuPoolName.ISOLATED
     version: Literal["1.0"] = Field(default=API_VERSION)
     preemption_policy: Optional[PreemptionPolicy] = None
+    placement: Optional[CpuPlacement] = None
+    l3_groups: Optional[List[str]] = None
     service_name: str = Field(description="Name of the service that was allocated cores")
     numa_node: int = Field(description="NUMA node cores were allocated from")
     num_of_cores: int = Field(description="Number of cores that were requested (or -1 to dealloc)")
@@ -198,6 +214,7 @@ class SnapAllocation(BaseModel):
 
     pool: CpuPoolName = CpuPoolName.ISOLATED
     preemption_policy: PreemptionPolicy = PreemptionPolicy.LEGACY
+    l3_groups: Optional[List[str]] = None
     service_name: str = Field(description="Name of the service")
     allocated_cores: str = Field(description="Comma-separated list of allocated CPU ranges")
     cores_count: int = Field(description="Number of cores allocated to this service")
@@ -213,6 +230,14 @@ class CpuPoolInfo(BaseModel):
     configured_cpus: str = Field(description="Configured CPU IDs before online filtering")
     eligible_cpus: str = Field(description="Configured CPU IDs currently online")
     unavailable_allocated_cpus: str = Field(description="Recorded claims outside eligible CPUs")
+
+
+class L3GroupInfo(BaseModel):
+    """An L3 group as seen from the selected pool."""
+
+    cpus: str
+    free: str
+    partial: bool
 
 
 class ListAllocationsResponse(BaseModel):
@@ -232,6 +257,7 @@ class ListAllocationsResponse(BaseModel):
         description="Number of CPUs still available for allocation"
     )
     allocations: List[SnapAllocation] = Field(description="List of all service allocations")
+    l3_topology: Optional[List[L3GroupInfo]] = None
     cpu_pool: CpuPoolInfo = Field(description="Active pool, not a pending snap setting")
 
 
@@ -300,3 +326,4 @@ class ErrorResponse(BaseModel):
 
     version: Literal["1.0"] = Field(default=API_VERSION)
     error: str
+    code: Optional[str] = None

@@ -18,6 +18,7 @@ from epa_orchestrator.hugepages_db import (
     remove_allocation_for_key,
     upsert_allocation,
 )
+from epa_orchestrator.l3_topology import L3Topology, PlacementError
 from epa_orchestrator.memory_manager import get_memory_summary
 from epa_orchestrator.schemas import (
     ActionType,
@@ -29,6 +30,7 @@ from epa_orchestrator.schemas import (
     AllocateHugepagesResponse,
     AllocateNumaCoresRequest,
     AllocateNumaCoresResponse,
+    CpuPlacement,
     CpuPoolInfo,
     CpuPoolName,
     ErrorResponse,
@@ -41,7 +43,6 @@ from epa_orchestrator.schemas import (
 from epa_orchestrator.state_store import StateCorruptionError
 from epa_orchestrator.utils import (
     _count_cpus_in_ranges,
-    get_cpus_in_numa_node,
     get_numa_node_cpus,
     parse_cpu_ranges,
     to_ranges,
@@ -100,12 +101,38 @@ def validate_startup_pool(pools: CpuPools) -> None:
     """Log pool/claim conflicts but keep introspection and releases available."""
     for pool in CpuPoolName:
         claimed = allocations_db.get_claimed_cpus(pool)
-        if not claimed:
+        if pool == CpuPoolName.GENERAL and pools.general is None and not claimed:
             continue
         try:
-            pools.select(pool).validate_claims(claimed)
+            provider = pools.select(pool)
+            provider.warn_partial_l3_groups(pool)
+            provider.validate_claims(claimed)
         except ValueError as exc:
             logging.error("New CPU allocations blocked in pool %s: %s", pool.value, exc)
+
+
+def _get_l3_topology(
+    provider: CpuPoolProvider, pool: CpuPoolSnapshot, *, required: bool = False
+) -> Optional[L3Topology]:
+    """Use best-effort topology for reporting and require it for placement."""
+    try:
+        return provider.get_l3_topology(pool)
+    except PlacementError:
+        if required:
+            raise
+        return None
+
+
+def _placement_snapshot(
+    provider: CpuPoolProvider, request: AllocateCoresRequest | AllocateNumaCoresRequest
+) -> CpuPoolSnapshot:
+    """Preserve the strict placement error contract when reading online CPUs."""
+    try:
+        return provider.snapshot(allow_unavailable=request.num_of_cores == -1)
+    except ValueError as exc:
+        if request.num_of_cores > 0 and request.placement == CpuPlacement.SINGLE_L3:
+            raise PlacementError("l3_topology_unavailable", str(exc)) from exc
+        raise
 
 
 def handle_allocate_cores(
@@ -113,11 +140,13 @@ def handle_allocate_cores(
     pool_provider: Optional[CpuPools] = None,
 ) -> AllocateCoresResponse:
     """Allocate using one pool snapshot and one locked ownership transaction."""
+    if request.placement is not None and request.num_of_cores <= 0 and request.num_of_cores != -1:
+        raise PlacementError(
+            "placement_not_supported", "L3 placement requires an explicit positive CPU count"
+        )
     provider = (pool_provider or get_cpu_pool_provider()).select(request.pool)
     return allocations_db.transaction(
-        lambda db: _allocate_cores(
-            request, db, provider, provider.snapshot(allow_unavailable=request.num_of_cores == -1)
-        )
+        lambda db: _allocate_cores(request, db, provider, _placement_snapshot(provider, request))
     )
 
 
@@ -142,15 +171,20 @@ def _allocate_cores(
             num_of_cores=0,
             cores_allocated=0,
             allocated_cores="",
+            placement=request.placement,
+            l3_groups=[],
             shared_cpus=remaining_shared,
             total_available_cpus=stats["total_available_cpus"],
             remaining_available_cpus=stats["remaining_available_cpus"],
         )
 
     provider.validate_claims(db.get_claimed_cpus(request.pool))
-    if not pool.eligible_cpus:
+    if not pool.eligible_cpus and request.placement != CpuPlacement.SINGLE_L3:
         raise ValueError("No CPUs available")
 
+    topology = _get_l3_topology(
+        provider, pool, required=request.placement == CpuPlacement.SINGLE_L3
+    )
     num_of_cores = request.num_of_cores or 0
     shared, dedicated = db.allocate_count(
         request.service_name,
@@ -159,6 +193,7 @@ def _allocate_cores(
         request.preemption_policy,
         check_online=provider.check_online,
         pool=request.pool,
+        placement=(request.placement, topology) if request.placement and topology else None,
     )
 
     updated_stats = db.get_system_stats(eligible)
@@ -170,6 +205,8 @@ def _allocate_cores(
         num_of_cores=num_of_cores,
         cores_allocated=cores_allocated,
         allocated_cores=dedicated,
+        placement=request.placement,
+        l3_groups=topology.claim_groups(dedicated) if topology else None,
         preemption_policy=db.get_preemption_policy(request.service_name),
         shared_cpus=shared,
         total_available_cpus=updated_stats["total_available_cpus"],
@@ -189,6 +226,10 @@ def handle_allocate_cores_percent(
     The computed core count is ceiling-rounded so small positive percentages
     (e.g. 1% of 8 cores) yield at least 1 core and never fall back to num_of_cores=0.
     """
+    if request.placement is not None:
+        raise PlacementError(
+            "placement_not_supported", "L3 placement is unsupported for percentage requests"
+        )
     provider = (pool_provider or get_cpu_pool_provider()).select(request.pool)
     return allocations_db.transaction(
         lambda db: _allocate_cores_percent(
@@ -225,6 +266,7 @@ def _allocate_cores_percent(
         cores_allocated_count=result.cores_allocated,
         preemption_policy=result.preemption_policy,
         allocated_cores=result.allocated_cores,
+        l3_groups=result.l3_groups,
         total_available_cpus=result.total_available_cpus,
         remaining_available_cpus=result.remaining_available_cpus,
     )
@@ -241,7 +283,7 @@ def handle_allocate_numa_cores(
     provider = (pool_provider or get_cpu_pool_provider()).select(request.pool)
     return allocations_db.transaction(
         lambda db: _allocate_numa_cores(
-            request, db, provider, provider.snapshot(allow_unavailable=request.num_of_cores == -1)
+            request, db, provider, _placement_snapshot(provider, request)
         )
     )
 
@@ -283,26 +325,20 @@ def _allocate_numa_cores(
             numa_node=request.numa_node,
             num_of_cores=request.num_of_cores,
             cores_allocated=allocated_cores,
+            placement=request.placement,
+            l3_groups=[],
             preemption_policy=db.get_preemption_policy(request.service_name),
             total_available_cpus=stats["total_available_cpus"],
             remaining_available_cpus=updated_stats["remaining_available_cpus"],
         )
 
     provider.validate_claims(db.get_claimed_cpus(request.pool))
-    if not pool.eligible_cpus:
-        raise ValueError("No CPUs available")
+    if request.placement != CpuPlacement.SINGLE_L3:
+        _validate_numa_capacity(request, pool, numa_cpus[request.numa_node])
 
-    # Allocation path (num_of_cores > 0)
-    available_numa_cpus = get_cpus_in_numa_node(request.numa_node, eligible)
-    if not available_numa_cpus:
-        raise ValueError(f"No eligible CPUs available in NUMA node {request.numa_node}")
-
-    if len(available_numa_cpus) < request.num_of_cores:
-        raise ValueError(
-            f"NUMA node {request.numa_node} only has {len(available_numa_cpus)} eligible CPUs, "
-            f"but {request.num_of_cores} were requested"
-        )
-
+    topology = _get_l3_topology(
+        provider, pool, required=request.placement == CpuPlacement.SINGLE_L3
+    )
     allocated_cores, unavailable = db.allocate_numa_cores(
         request.service_name,
         request.numa_node,
@@ -311,6 +347,7 @@ def _allocate_numa_cores(
         eligible_cpus=pool.eligible_cpus,
         check_online=provider.check_online,
         pool=request.pool,
+        placement=(request.placement, topology) if request.placement and topology else None,
     )
 
     if not allocated_cores:
@@ -328,10 +365,27 @@ def _allocate_numa_cores(
         numa_node=request.numa_node,
         num_of_cores=request.num_of_cores,
         cores_allocated=allocated_cores,
+        placement=request.placement,
+        l3_groups=topology.claim_groups(allocated_cores) if topology else None,
         preemption_policy=db.get_preemption_policy(request.service_name),
         total_available_cpus=stats["total_available_cpus"],
         remaining_available_cpus=updated_stats["remaining_available_cpus"],
     )
+
+
+def _validate_numa_capacity(
+    request: AllocateNumaCoresRequest, pool: CpuPoolSnapshot, node_cpus: set[int]
+) -> None:
+    if not pool.eligible_cpus:
+        raise ValueError("No CPUs available")
+    available_numa_cpus = node_cpus & pool.eligible_cpus
+    if not available_numa_cpus:
+        raise ValueError(f"No eligible CPUs available in NUMA node {request.numa_node}")
+    if len(available_numa_cpus) < request.num_of_cores:
+        raise ValueError(
+            f"NUMA node {request.numa_node} only has {len(available_numa_cpus)} eligible CPUs, "
+            f"but {request.num_of_cores} were requested"
+        )
 
 
 # Hugepages/memory handlers restored from main
@@ -431,12 +485,17 @@ def handle_list_allocations(
     all_owned = set().union(*(parse_cpu_ranges(entry.allocated_cores) for entry in all_entries))
     owned = set().union(*(parse_cpu_ranges(entry.allocated_cores) for entry in entries))
     unavailable = owned - pool.eligible_cpus
-    return ListAllocationsResponse(
+    topology = _get_l3_topology(provider, pool)
+    if topology:
+        for entry in entries:
+            entry.l3_groups = topology.claim_groups(entry.allocated_cores)
+    result = ListAllocationsResponse(
         pool=request.pool,
         total_allocations=len(entries),
         total_allocated_cpus=len(owned),
         total_available_cpus=len(pool.eligible_cpus),
         remaining_available_cpus=len(pool.eligible_cpus - all_owned),
+        l3_topology=topology.pool_groups(pool.configured_cpus, all_owned) if topology else None,
         allocations=entries,
         cpu_pool=CpuPoolInfo(
             source=pool.source,
@@ -445,6 +504,9 @@ def handle_list_allocations(
             unavailable_allocated_cpus=to_ranges(sorted(unavailable)),
         ),
     )
+    if topology and pool.eligible_cpus:
+        result.supported_cpu_features.append("l3-placement")
+    return result
 
 
 def handle_daemon_request(data: bytes, pool_provider: Optional[CpuPools] = None) -> bytes:
@@ -484,7 +546,7 @@ def handle_daemon_request(data: bytes, pool_provider: Optional[CpuPools] = None)
         entry = dispatcher.get(key)
         if not entry:
             response = ErrorResponse(error=f"Unknown action: {action_value}", version="1.0")
-            response_bytes = response.json().encode()
+            response_bytes = response.model_dump_json(exclude_none=True).encode()
         else:
             schema_cls, handler_fn = entry
             req_obj: BaseModel = schema_cls.parse_obj(request_data)
@@ -495,13 +557,15 @@ def handle_daemon_request(data: bytes, pool_provider: Optional[CpuPools] = None)
         raise
     except (ValidationError, json.JSONDecodeError) as e:
         error_response = ErrorResponse(error=str(e), version="1.0")
-        response_bytes = error_response.json().encode()
+        response_bytes = error_response.model_dump_json(exclude_none=True).encode()
+    except PlacementError as e:
+        response_bytes = ErrorResponse(error=str(e), code=e.code).model_dump_json().encode()
     except ValueError as e:
         error_response = ErrorResponse(error=str(e), version="1.0")
-        response_bytes = error_response.json().encode()
+        response_bytes = error_response.model_dump_json(exclude_none=True).encode()
     except Exception as e:
         error_response = ErrorResponse(error=str(e), version="1.0")
-        response_bytes = error_response.json().encode()
+        response_bytes = error_response.model_dump_json(exclude_none=True).encode()
 
     logging.info("EPA response: %s", response_bytes.decode())
     try:

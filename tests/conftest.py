@@ -89,6 +89,7 @@ def reset_cpu_provider(tmp_path, monkeypatch):
     online.write_text("0-511")
     monkeypatch.setattr(cpu_pool.cpu_pinning, "PRESENT_CPUS_PATH", str(present))
     monkeypatch.setattr(cpu_pool, "ONLINE_CPUS_PATH", str(online))
+    monkeypatch.setattr(cpu_pool, "CPU_SYSFS", tmp_path / "cpu-sysfs")
     monkeypatch.setattr(daemon_handler, "_default_pool_provider", None)
 
 
