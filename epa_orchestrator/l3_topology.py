@@ -96,8 +96,10 @@ def pack_groups(
     count: int,
     numa_cpus: dict[int, set[int]],
     retained: AbstractSet[int],
+    *,
+    numa_without_reclamation: AbstractSet[int] | None = None,
 ) -> list[set[int]]:
-    """Minimize group count, then new NUMA nodes, then prefer more capacity."""
+    """Minimize caches, then new NUMA nodes or reclamation for a node-scoped grant."""
     fullest = sorted(groups, key=lambda group: (-len(group), min(group)))
     capacity = 0
     for group_count, group in enumerate(fullest, 1):
@@ -106,6 +108,9 @@ def pack_groups(
             break
     else:
         raise ValueError(f"Insufficient CPUs available to place {count} CPUs")
+
+    if numa_without_reclamation is not None:
+        return _pack_by_reclamation(fullest, group_count, count, numa_without_reclamation)
 
     # A node contributes its largest groups for any fixed number of groups.
     node_by_cpu = {cpu: node for node, cpus in numa_cpus.items() for cpu in cpus}
@@ -123,6 +128,30 @@ def pack_groups(
     retained_nodes = {node_by_cpu.get(cpu) for cpu in retained}
     indices = _pack_by_node(fullest, buckets, group_count, count, retained_nodes)
     return [fullest[index] for index in indices]
+
+
+def _pack_by_reclamation(
+    groups: list[set[int]], group_count: int, count: int, without_reclamation: AbstractSet[int]
+) -> list[set[int]]:
+    """Choose a feasible packing on one node with the most free or already owned CPUs."""
+    free_counts = [len(group & without_reclamation) for group in groups]
+    if sum(free_counts[:group_count]) >= count:
+        return groups[:group_count]
+
+    # At a given group count and capacity, only the most free CPUs can improve the shortfall.
+    plans: dict[tuple[int, int], tuple[int, tuple[int, ...]]] = {(0, 0): (0, ())}
+    for index, (group, free) in enumerate(zip(groups, free_counts, strict=True)):
+        updated = plans.copy()
+        for (used, capacity), (available, indices) in plans.items():
+            if used == group_count:
+                continue
+            key = (used + 1, min(count, capacity + len(group)))
+            candidate = (min(count, available + free), (*indices, index))
+            previous = updated.get(key)
+            if previous is None or (-candidate[0], candidate[1]) < (-previous[0], previous[1]):
+                updated[key] = candidate
+        plans = updated
+    return [groups[index] for index in plans[group_count, count][1]]
 
 
 def _pack_by_node(

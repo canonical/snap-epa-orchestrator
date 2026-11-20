@@ -226,7 +226,7 @@ def handle_allocate_cores_percent(
     The computed core count is ceiling-rounded so small positive percentages
     (e.g. 1% of 8 cores) yield at least 1 core and never fall back to num_of_cores=0.
     """
-    if request.placement is not None:
+    if "placement" in request.model_fields_set:
         raise PlacementError(
             "placement_not_supported", "L3 placement is unsupported for percentage requests"
         )

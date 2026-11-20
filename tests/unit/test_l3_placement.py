@@ -237,6 +237,30 @@ def test_numa_minimizes_reclamation_across_fitting_groups(topology, placement):
     assert allocations_db.get_allocation("second") == "5"
 
 
+@pytest.mark.parametrize(
+    "groups,legacy,selected,remaining",
+    [
+        ([range(4), range(4, 8), range(8, 12)], "0-3", "4-11", "0-3"),
+        (
+            [range(6), range(6, 10), range(10, 13), range(13, 17)],
+            "0-5,13",
+            "6-9,13-16",
+            "0-5",
+        ),
+    ],
+)
+def test_numa_minimizes_reclamation_for_multi_group_grants(
+    topology, groups, legacy, selected, remaining
+):
+    """Minimize reclamation among feasible two-cache packings."""
+    pools = topology([set(group) for group in groups])
+    store_claim("legacy", legacy, PreemptionPolicy.LEGACY)
+    result = api(pools, "allocate_numa_cores", numa_node=0, num_of_cores=8, placement="fewest_l3")
+    assert result["cores_allocated"] == selected
+    assert len(result["l3_groups"]) == 2
+    assert allocations_db.get_allocation("legacy") == remaining
+
+
 def test_l3_map_refreshes_on_hotplug_and_reports_partial(topology, mock_cpu_files_empty, caplog):
     """Offline siblings shrink the group, while online CPUs outside the pool mark it partial."""
     pools = topology([{0, 1, 2}, {3, 4}], configured="0-1,3-4")
@@ -315,9 +339,15 @@ def test_unsupported_requests_return_a_placement_code(bergamo):
     """Default-size and percentage requests cannot silently ignore explicit placement."""
     assert claim(bergamo, 0)["code"] == "placement_not_supported"
     for percent in (0, 100):
-        result = api(bergamo, "allocate_cores_percent", percent=percent, placement="single_l3")
-        assert result["code"] == "placement_not_supported"
+        for placement in ("single_l3", "fewest_l3", None):
+            result = api(bergamo, "allocate_cores_percent", percent=percent, placement=placement)
+            assert result["code"] == "placement_not_supported"
+    invalid = api(bergamo, "allocate_cores_percent", percent=10, placement="unknown")
+    assert "error" in invalid
     assert api(bergamo)["allocations"] == []
+    ordinary = api(bergamo, "allocate_cores_percent", percent=10)
+    assert "error" not in ordinary
+    assert "placement" not in ordinary
 
 
 def test_fewest_l3_shrink_drops_groups_without_moving_cpus(topology):

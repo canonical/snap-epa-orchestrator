@@ -64,7 +64,8 @@ class AllocateCoresPercentRequest(BaseModel):
     version: Literal["1.0"] = Field(default=API_VERSION)
     action: Literal[ActionType.ALLOCATE_CORES_PERCENT]
     preemption_policy: Optional[PreemptionPolicy] = None
-    placement: object = None
+    # Recognize unsupported placement on input without emitting it in client requests.
+    placement: Optional[CpuPlacement] = Field(default=None, exclude=True)
     service_name: str = Field(description="Name of the requesting service")
     percent: int = Field(
         ge=-1,
@@ -181,7 +182,6 @@ class AllocateCoresPercentResponse(BaseModel):
     pool: CpuPoolName = CpuPoolName.ISOLATED
     version: Literal["1.0"] = Field(default=API_VERSION)
     preemption_policy: Optional[PreemptionPolicy] = None
-    placement: Optional[CpuPlacement] = None
     l3_groups: Optional[List[str]] = None
     service_name: str = Field(description="Name of the service that was allocated cores")
     cores_allocated_count: int = Field(description="Number of cores that were actually allocated")

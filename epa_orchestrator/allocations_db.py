@@ -491,8 +491,9 @@ class AllocationsDB:
             return self._shrink_claim(retained, count)
 
         candidates = set().union(*groups)
+        without_reclamation = candidates - (self._allocated_cpus - own)
         if not retained:
-            group = choose_group(groups, count, own | (candidates - self._allocated_cpus))
+            group = choose_group(groups, count, without_reclamation)
             if group:
                 return self._select_with_reclamation(group, own, count)
 
@@ -502,15 +503,22 @@ class AllocationsDB:
         if needed <= len(room):
             return retained | self._select_numa_cpus_smt_aware(room, needed)
         selected = retained | room
-        try:
-            numa_cpus = get_numa_node_cpus()
-        except ValueError:
-            numa_cpus = {}
+        # Only a request scoped to one NUMA node can see another claim's reclaimable CPUs.
+        numa_without_reclamation = (
+            without_reclamation if without_reclamation != candidates else None
+        )
+        numa_cpus = {}
+        if numa_without_reclamation is None:
+            try:
+                numa_cpus = get_numa_node_cpus()
+            except ValueError:
+                pass
         added = pack_groups(
             [group for group in groups if group not in current],
             count - len(selected),
             numa_cpus,
             selected,
+            numa_without_reclamation=numa_without_reclamation,
         )
         return selected | self._select_with_reclamation(
             set().union(*added), own, count - len(selected)

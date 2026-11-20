@@ -179,11 +179,13 @@ mode. Older daemons can silently ignore the field.
   `l3_topology_unavailable` when cache topology cannot be read.
 - `fewest_l3` uses the same placement when one group fits. For larger grants,
   it minimizes the number of L3 groups, preferring fewer NUMA nodes where
-  topology permits. If L3 topology cannot be read, it uses ordinary selection.
+  topology permits. Within a requested NUMA node, it then minimizes the
+  number of CPUs reclaimed from other claims. If L3 topology cannot be read,
+  it uses ordinary selection.
 - Both modes work on positive-count and NUMA requests. A NUMA request covers
-  the selected node only. Explicit placement on a percentage or default-size
-  request returns `placement_not_supported`. Count and NUMA releases ignore
-  placement.
+  the selected node only. Percentage requests must omit `placement` entirely,
+  including when its value would be `null`. A placement mode on a default-size
+  request returns `placement_not_supported`. Count and NUMA releases ignore placement.
 - On a non-preemptive resize, retained CPUs stay in place. A `fewest_l3` shrink
   uses the fewest caches and prefers keeping more SMT pairs among placements
   that use that many caches. Strict placement returns `l3_growth_would_spill` if an
