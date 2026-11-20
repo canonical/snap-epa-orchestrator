@@ -174,31 +174,33 @@ mode. Older daemons can silently ignore the field.
 ```
 
 - `single_l3` requires the CPUs selected by the request to share one L3 cache.
-  It chooses the smallest group with enough candidates and returns
-  `l3_no_group_fits` when none fit, or `l3_topology_unavailable` when cache
-  topology cannot be read.
-- `fewest_l3` uses the same placement when one group fits. For larger claims,
+  It prefers groups that need the fewest CPUs from other claims, then the
+  smallest fitting group. It returns `l3_no_group_fits` when none fit, or
+  `l3_topology_unavailable` when cache topology cannot be read.
+- `fewest_l3` uses the same placement when one group fits. For larger grants,
   it minimizes the number of L3 groups, preferring fewer NUMA nodes where
   topology permits. If L3 topology cannot be read, it uses ordinary selection.
 - Both modes work on positive-count and NUMA requests. A NUMA request covers
   the selected node only. Explicit placement on a percentage or default-size
   request returns `placement_not_supported`. Count and NUMA releases ignore
   placement.
-- On a non-preemptive resize, retained CPUs stay in place and shrinks prefer
-  keeping SMT pairs. Strict placement returns `l3_growth_would_spill` if an
+- On a non-preemptive resize, retained CPUs stay in place. A `fewest_l3` shrink
+  uses the fewest caches and prefers keeping more SMT pairs among placements
+  that use that many caches. Strict placement returns `l3_growth_would_spill` if an
   existing group cannot accommodate growth and `l3_claim_spans_groups` if the
   current claim already spans groups. These errors leave claims intact.
   Placement applies per request, so send the mode again on subsequent resizes.
 
-Allocation responses and listing entries include `l3_groups`, an array of CPU
-range strings, one per shared L3 cache involved in the claim. A `null` value
+Allocation responses include `l3_groups`, an array of CPU range strings, one
+per shared L3 cache involved in the claim. A `null` value
 means the daemon could not determine group membership. On an echoed
 `fewest_l3` grant, this also indicates ordinary fallback selection.
 
-`list_allocations` includes `l3_topology`, or `null` when topology is
-unavailable. Each entry has `cpus` (eligible IDs), `free` (eligible IDs with
-no claim), and `partial` (the group contains online CPUs outside the configured
-pool). For example:
+Set `"include_l3_topology": true` on a `list_allocations` request to include
+`l3_groups` on each claim and `l3_topology` for the pool. Both fields can be
+`null` when the relevant topology is unavailable. Each pool entry has
+`cpus` (eligible IDs), `free` (eligible IDs with no claim), and `partial`
+(the group contains online CPUs outside the configured pool). For example:
 
 ```json
 {"cpus": "32-39,288-295", "free": "36-39,292-295", "partial": false}
@@ -269,7 +271,8 @@ The daemon listens on:
 $SNAP_DATA/data/epa.sock
 ```
 
-Clients can connect to this socket and send JSON requests. The supported actions are:
+Open one connection per JSON request and read the response until the daemon
+closes the connection. The supported actions are:
 
 #### 1. Allocate Cores (`allocate_cores`)
 

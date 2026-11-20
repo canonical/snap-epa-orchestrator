@@ -87,14 +87,18 @@ def test_wire_discovery_and_grouped_claims(bergamo):
     """Report placement, eligible/free L3 groups and claim membership on all count paths."""
     initial = api(bergamo)
     assert "l3-placement" in initial["supported_cpu_features"]
-    assert len(initial["l3_topology"]) == 4
+    assert "l3_topology" not in initial
+    assert len(api(bergamo, include_l3_topology=True)["l3_topology"]) == 4
 
     response = claim(bergamo, 12)
     assert response["placement"] == "single_l3"
     assert response["l3_groups"] == ["0-5,256-261"]
     assert response["allocated_cores"] == "0-5,256-261"
     assert len(parse_cpu_ranges(response["shared_cpus"])) == 52
-    listed = api(bergamo)
+    default = api(bergamo, include_l3_topology=False)
+    assert "l3_topology" not in default
+    assert "l3_groups" not in default["allocations"][0]
+    listed = api(bergamo, include_l3_topology=True)
     assert listed["allocations"][0]["l3_groups"] == response["l3_groups"]
     assert listed["l3_topology"][0] == {
         "cpus": "0-7,256-263",
@@ -124,14 +128,14 @@ def test_best_fit_reclaims_space_in_a_fragmented_group(bergamo):
         result = claim(bergamo, 4)
         assert result["allocated_cores"] == "14-15,270-271"
         assert claim(bergamo, -1)["l3_groups"] == []
-    assert api(bergamo)["l3_topology"][0]["free"] == "0-7,256-263"
+    assert api(bergamo, include_l3_topology=True)["l3_topology"][0]["free"] == "0-7,256-263"
 
 
 def test_whole_group_claim(bergamo):
     """A protected whole group remains unavailable to subsequent grants."""
     result = claim(bergamo, 16, preemption_policy="non-preemptive")
     assert result["l3_groups"] == ["0-7,256-263"]
-    assert api(bergamo)["l3_topology"][0]["free"] == ""
+    assert api(bergamo, include_l3_topology=True)["l3_topology"][0]["free"] == ""
     assert claim(bergamo, 2, name="another", preemption_policy="non-preemptive")["l3_groups"] == [
         "8,264"
     ]
@@ -204,7 +208,8 @@ def test_numa_prefers_a_group_without_reclamation(bergamo):
         bergamo, "allocate_numa_cores", numa_node=1, num_of_cores=4, placement="single_l3"
     )
     assert second["l3_groups"] == ["16-17,272-273"]
-    entry = next(entry for entry in api(bergamo)["allocations"] if entry["service_name"] == "osd")
+    listing = api(bergamo, include_l3_topology=True)
+    entry = next(entry for entry in listing["allocations"] if entry["service_name"] == "osd")
     assert entry["l3_groups"] == ["8-9,264-265", "16-17,272-273"]
 
 
@@ -220,10 +225,26 @@ def test_numa_can_reclaim_legacy_claim_when_needed(bergamo):
     assert allocations_db.get_allocation("second") == "8-15,264-271"
 
 
+@pytest.mark.parametrize("placement", ["single_l3", "fewest_l3"])
+def test_numa_minimizes_reclamation_across_fitting_groups(topology, placement):
+    """Reclaim one CPU instead of three when both caches fit the grant."""
+    pools = topology([set(range(4)), set(range(4, 8))])
+    store_claim("first", "0-3", PreemptionPolicy.LEGACY)
+    store_claim("second", "4-5", PreemptionPolicy.LEGACY)
+    result = api(pools, "allocate_numa_cores", numa_node=0, num_of_cores=3, placement=placement)
+    assert result["cores_allocated"] == "4,6-7"
+    assert allocations_db.get_allocation("first") == "0-3"
+    assert allocations_db.get_allocation("second") == "5"
+
+
 def test_l3_map_refreshes_on_hotplug_and_reports_partial(topology, mock_cpu_files_empty, caplog):
     """Offline siblings shrink the group, while online CPUs outside the pool mark it partial."""
     pools = topology([{0, 1, 2}, {3, 4}], configured="0-1,3-4")
-    assert api(pools)["l3_topology"][0] == {"cpus": "0-1", "free": "0-1", "partial": True}
+    assert api(pools, include_l3_topology=True)["l3_topology"][0] == {
+        "cpus": "0-1",
+        "free": "0-1",
+        "partial": True,
+    }
     validate_startup_pool(pools)
     assert "CPU pool general cuts through L3 groups: 0-1" in caplog.text
 
@@ -232,9 +253,17 @@ def test_l3_map_refreshes_on_hotplug_and_reports_partial(topology, mock_cpu_file
         shared_list = cpu_pool.CPU_SYSFS / f"cpu{cpu}/cache/index5/shared_cpu_list"
         shared_list.write_text("0-1")
     mock_cpu_files_empty["online"].write_text("0-1,3-4")
-    assert api(pools)["l3_topology"][0] == {"cpus": "0-1", "free": "0-1", "partial": False}
+    assert api(pools, include_l3_topology=True)["l3_topology"][0] == {
+        "cpus": "0-1",
+        "free": "0-1",
+        "partial": False,
+    }
     mock_cpu_files_empty["online"].write_text("0,3-4")
-    assert api(pools)["l3_topology"][0] == {"cpus": "0", "free": "0", "partial": False}
+    assert api(pools, include_l3_topology=True)["l3_topology"][0] == {
+        "cpus": "0",
+        "free": "0",
+        "partial": False,
+    }
 
 
 def test_configure_hook_warns_for_partial_group(topology, snap_pool_options, caplog):
@@ -263,12 +292,12 @@ def test_unreadable_cache_data_fails_closed_but_legacy_can_allocate(bergamo, mon
 
     monkeypatch.setattr(Path, "read_text", patched)
     store_claim("osd", "0,256")
-    listing = api(bergamo)
+    listing = api(bergamo, include_l3_topology=True)
     assert "l3-placement" not in listing["supported_cpu_features"]
     assert listing["l3_topology"] is None
     assert listing["allocations"][0]["l3_groups"] is None
     assert claim(bergamo, 4)["code"] == "l3_topology_unavailable"
-    assert api(bergamo) == listing
+    assert api(bergamo, include_l3_topology=True) == listing
 
     fallback = claim(bergamo, 2, name="plain", placement="fewest_l3")
     assert fallback["l3_groups"] is None
@@ -299,6 +328,22 @@ def test_fewest_l3_shrink_drops_groups_without_moving_cpus(topology):
     result = claim(pools, 4, placement="fewest_l3")
     assert result["allocated_cores"] == "1,3,5,7"
     assert result["l3_groups"] == ["1,3,5,7"]
+
+
+@pytest.mark.parametrize(
+    "owned,count,expected",
+    [("0-1,4-7", 2, ["4,6"]), ("0-2,4-6,8-9", 4, ["4,6", "8-9"])],
+)
+def test_fewest_l3_protected_shrink_prefers_owned_smt_pairs(topology, owned, count, expected):
+    """Keep pairs when multiple placements fit in the minimum number of caches."""
+    pools = topology(
+        [{0, 1, 2, 3}, {4, 5, 6, 7}, {8, 9}],
+        siblings={4: {4, 6}, 6: {4, 6}, 8: {8, 9}, 9: {8, 9}},
+    )
+    store_claim("osd", owned)
+    result = claim(pools, count, placement="fewest_l3")
+    assert result["l3_groups"] == expected
+    assert parse_cpu_ranges(result["allocated_cores"]) <= parse_cpu_ranges(owned)
 
 
 @pytest.mark.parametrize(

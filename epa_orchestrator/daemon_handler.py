@@ -486,7 +486,7 @@ def handle_list_allocations(
     owned = set().union(*(parse_cpu_ranges(entry.allocated_cores) for entry in entries))
     unavailable = owned - pool.eligible_cpus
     topology = _get_l3_topology(provider, pool)
-    if topology:
+    if topology and request.include_l3_topology:
         for entry in entries:
             entry.l3_groups = topology.claim_groups(entry.allocated_cores)
     result = ListAllocationsResponse(
@@ -495,7 +495,11 @@ def handle_list_allocations(
         total_allocated_cpus=len(owned),
         total_available_cpus=len(pool.eligible_cpus),
         remaining_available_cpus=len(pool.eligible_cpus - all_owned),
-        l3_topology=topology.pool_groups(pool.configured_cpus, all_owned) if topology else None,
+        l3_topology=(
+            topology.pool_groups(pool.configured_cpus, all_owned)
+            if topology and request.include_l3_topology
+            else None
+        ),
         allocations=entries,
         cpu_pool=CpuPoolInfo(
             source=pool.source,
@@ -507,6 +511,15 @@ def handle_list_allocations(
     if topology and pool.eligible_cpus:
         result.supported_cpu_features.append("l3-placement")
     return result
+
+
+def _serialize_response(request: BaseModel, response: BaseModel) -> bytes:
+    """Omit detailed topology from listings unless the client requests it."""
+    if isinstance(request, ListAllocationsRequest) and not request.include_l3_topology:
+        return response.model_dump_json(
+            exclude={"l3_topology": True, "allocations": {"__all__": {"l3_groups"}}}
+        ).encode()
+    return response.model_dump_json().encode()
 
 
 def handle_daemon_request(data: bytes, pool_provider: Optional[CpuPools] = None) -> bytes:
@@ -551,7 +564,7 @@ def handle_daemon_request(data: bytes, pool_provider: Optional[CpuPools] = None)
             schema_cls, handler_fn = entry
             req_obj: BaseModel = schema_cls.parse_obj(request_data)
             resp_obj: BaseModel = handler_fn(req_obj)
-            response_bytes = resp_obj.json().encode()
+            response_bytes = _serialize_response(req_obj, resp_obj)
     except StateCorruptionError:
         # Let corruption crash the daemon so the charm can block/alert
         raise

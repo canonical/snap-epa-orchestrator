@@ -10,11 +10,17 @@ import json
 import socket
 
 
+def _request(socket_path, request):
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(10)
+        client.connect(socket_path)
+        client.sendall(json.dumps(request).encode())
+        with client.makefile("rb") as response:
+            return json.load(response)
+
+
 def test_allocate_cores_via_socket_api(socket_path):
     """Test that allocate_cores works with real daemon."""
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.connect(socket_path)
-
     request = {
         "version": "1.0",
         "service_name": "test-service",
@@ -22,9 +28,7 @@ def test_allocate_cores_via_socket_api(socket_path):
         "num_of_cores": 2,
     }
 
-    sock.sendall(json.dumps(request).encode())
-    response = sock.recv(4096).decode()
-    result = json.loads(response)
+    result = _request(socket_path, request)
 
     if "error" in result:
         # Acceptable if no isolated CPUs are configured
@@ -45,23 +49,16 @@ def test_allocate_cores_via_socket_api(socket_path):
         assert result["total_available_cpus"] > 0
         assert "shared_cpus" in result
 
-    sock.close()
-
 
 def test_list_allocations_via_socket_api(socket_path):
     """Test that list_allocations works with real daemon."""
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.connect(socket_path)
-
     request = {
         "version": "1.0",
         "service_name": "any-service",
         "action": "list_allocations",
     }
 
-    sock.sendall(json.dumps(request).encode())
-    response = sock.recv(4096).decode()
-    result = json.loads(response)
+    result = _request(socket_path, request)
 
     assert result["version"] == "1.0"
 
@@ -79,5 +76,3 @@ def test_list_allocations_via_socket_api(socket_path):
     for allocation in result["allocations"]:
         assert "is_explicit" in allocation
         assert isinstance(allocation["is_explicit"], bool)
-
-    sock.close()

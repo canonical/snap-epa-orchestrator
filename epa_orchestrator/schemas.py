@@ -79,6 +79,7 @@ class ListAllocationsRequest(BaseModel):
     pool: CpuPoolName = CpuPoolName.ISOLATED
     version: Literal["1.0"] = Field(default=API_VERSION)
     action: Literal[ActionType.LIST_ALLOCATIONS]
+    include_l3_topology: bool = False
     service_name: Optional[str] = Field(
         default=None,
         description="Name of the requesting service (optional)",

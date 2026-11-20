@@ -17,16 +17,29 @@ from pydantic import parse_obj_as
 from epa_orchestrator.allocations_db import allocations_db
 from epa_orchestrator.cpu_pool import CpuPools
 from epa_orchestrator.daemon_handler import handle_daemon_request
+from epa_orchestrator.l3_topology import L3Topology
 from epa_orchestrator.schemas import (
     ActionType,
     AllocateCoresPercentRequest,
     AllocateCoresPercentResponse,
     AllocateCoresRequest,
     AllocateCoresResponse,
+    CpuPoolName,
     ErrorResponse,
     ListAllocationsRequest,
     ListAllocationsResponse,
 )
+from epa_orchestrator.utils import to_ranges
+
+
+def _exchange(socket_path, request):
+    """Read a complete response using the daemon's one-request connection."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(5)
+        client.connect(socket_path)
+        client.sendall(json.dumps(request).encode())
+        with client.makefile("rb") as response:
+            return response.read()
 
 
 class TestSocketCommunication:
@@ -334,17 +347,74 @@ class TestSocketCommunication:
             service_name="any-service", action=ActionType.LIST_ALLOCATIONS
         )
 
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.connect(socket_path)
-            client.sendall(request.json().encode())
-            response_data = client.recv(4096)
-
-        response = parse_obj_as(ListAllocationsResponse, json.loads(response_data.decode()))
+        response = ListAllocationsResponse.model_validate_json(
+            _exchange(socket_path, request.model_dump(mode="json"))
+        )
         assert response.total_allocations >= 0
         assert response.total_allocated_cpus >= 0
         assert response.total_available_cpus > 0
         assert response.remaining_available_cpus >= 0
         assert isinstance(response.allocations, list)
+
+    def test_two_cpu_strict_placement_stays_in_one_cache(
+        self, socket_daemon, socket_path, monkeypatch, mock_cpu_files_empty
+    ):
+        """Use a layout where ordinary selection crosses an L3 boundary."""
+        pools = CpuPools("0-3")
+        topology = L3Topology((frozenset({0, 2}), frozenset({1, 3})), frozenset(range(4)))
+        monkeypatch.setattr(pools.general, "get_l3_topology", lambda snapshot: topology)
+        monkeypatch.setattr("epa_orchestrator.daemon_handler.get_cpu_pool_provider", lambda: pools)
+        monkeypatch.setattr(
+            "epa_orchestrator.allocations_db.get_thread_siblings_map",
+            lambda cpus: {cpu: {cpu} for cpu in cpus},
+        )
+        request = {
+            "action": "allocate_cores",
+            "service_name": "placement",
+            "pool": "general",
+            "num_of_cores": 2,
+        }
+        ordinary = json.loads(_exchange(socket_path, request))
+        assert ordinary["l3_groups"] == ["0", "1"]
+        released = json.loads(_exchange(socket_path, {**request, "num_of_cores": -1}))
+        assert "error" not in released, released
+        placed = json.loads(_exchange(socket_path, {**request, "placement": "single_l3"}))
+        assert placed["placement"] == "single_l3"
+        assert placed["allocated_cores"] == "0,2"
+        assert placed["l3_groups"] == ["0,2"]
+
+    def test_large_l3_listing_is_opt_in(
+        self, socket_daemon, socket_path, monkeypatch, mock_cpu_files_empty
+    ):
+        """Keep legacy listings compact and read larger topology replies through EOF."""
+        pools = CpuPools("0-511")
+        groups = tuple(
+            frozenset(range(start, start + 8)) | frozenset(range(start + 256, start + 264))
+            for start in range(0, 256, 8)
+        )
+        topology = L3Topology(groups, frozenset(range(512)))
+        monkeypatch.setattr(pools.general, "get_l3_topology", lambda snapshot: topology)
+        monkeypatch.setattr("epa_orchestrator.daemon_handler.get_cpu_pool_provider", lambda: pools)
+        mock_cpu_files_empty["online"].write_text("0-511")
+        mock_cpu_files_empty["present"].write_text("0-511")
+        for index in range(16):
+            owned = groups[index * 2] | groups[index * 2 + 1]
+            allocations_db.allocate_cores(
+                f"ceph-osd.{index}", to_ranges(sorted(owned)), pool=CpuPoolName.GENERAL
+            )
+
+        request = {"action": "list_allocations", "pool": "general"}
+        default = _exchange(socket_path, request)
+        detailed = _exchange(socket_path, {**request, "include_l3_topology": True})
+        assert len(default) < 4096 < len(detailed)
+        listing = json.loads(default)
+        assert "l3_topology" not in listing
+        assert len(listing["allocations"]) == 16
+        assert all("l3_groups" not in claim for claim in listing["allocations"])
+        topology_listing = json.loads(detailed)
+        assert len(topology_listing["l3_topology"]) == 32
+        assert len(topology_listing["allocations"]) == 16
+        assert all(len(claim["l3_groups"]) == 2 for claim in topology_listing["allocations"])
 
     @pytest.mark.parametrize(
         "socket_daemon",
@@ -390,10 +460,7 @@ class TestSocketCommunication:
                 "pool": "general" if configured_mode else "isolated",
                 **fields,
             }
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-                client.connect(socket_path)
-                client.sendall(json.dumps(payload).encode())
-                return json.loads(client.recv(65536))
+            return json.loads(_exchange(socket_path, payload))
 
         assert (
             "non-preemptive-allocations" in request("list_allocations")["supported_cpu_features"]

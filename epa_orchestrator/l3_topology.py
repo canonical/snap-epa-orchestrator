@@ -56,16 +56,39 @@ class L3Topology:
 def choose_group(
     groups: list[set[int]], count: int, without_reclamation: AbstractSet[int]
 ) -> set[int]:
-    """Best fit, favoring placements that can avoid reclaiming CPUs."""
-    fits = sorted(
+    """Minimize reclamation before breaking ties by best fit and CPU ID."""
+    return min(
         (group for group in groups if len(group) >= count),
-        key=lambda group: (len(group), min(group)),
+        key=lambda group: (
+            max(0, count - len(group & without_reclamation)),
+            len(group),
+            min(group),
+        ),
+        default=set(),
     )
-    for group in fits:
-        free = group & without_reclamation
-        if len(free) >= count:
-            return free
-    return fits[0] if fits else set()
+
+
+def pack_shrink_groups(
+    groups: list[set[int]], pair_counts: list[int], group_count: int, count: int
+) -> tuple[int, tuple[int, ...]]:
+    """Find the most SMT pairs that fit in a fixed number of L3 groups."""
+    # For each group and pair count, keep the plan with the greatest capacity.
+    plans: dict[tuple[int, int], tuple[int, tuple[int, ...]]] = {(0, 0): (0, ())}
+    for index, (group, pairs) in enumerate(zip(groups, pair_counts, strict=True)):
+        updated = plans.copy()
+        for (used, kept_pairs), (capacity, selected) in plans.items():
+            if used == group_count:
+                continue
+            key = (used + 1, min(count // 2, kept_pairs + pairs))
+            new_capacity = capacity + len(group)
+            if new_capacity > updated.get(key, (0, ()))[0]:
+                updated[key] = (new_capacity, (*selected, index))
+        plans = updated
+    return max(
+        (pairs, selected)
+        for (used, pairs), (capacity, selected) in plans.items()
+        if used == group_count and capacity >= count
+    )
 
 
 def pack_groups(

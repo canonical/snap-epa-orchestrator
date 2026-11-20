@@ -22,7 +22,13 @@ from .cpu_pinning import (
     calculate_cpu_pinning,
     get_thread_siblings_map,
 )
-from .l3_topology import L3Topology, PlacementError, choose_group, pack_groups
+from .l3_topology import (
+    L3Topology,
+    PlacementError,
+    choose_group,
+    pack_groups,
+    pack_shrink_groups,
+)
 from .schemas import CpuPlacement, CpuPoolName, PreemptionPolicy, SnapAllocation
 from .state_store import StateCorruptionError, StateStore
 from .utils import (
@@ -402,7 +408,8 @@ class AllocationsDB:
         """Place an exact claim, preserving protected CPUs before considering new groups."""
         mode, topology = placement
         retained = own if policy == PreemptionPolicy.NON_PREEMPTIVE else set()
-        if mode == CpuPlacement.FEWEST_L3 and count < len(retained):
+        shrinking = mode == CpuPlacement.FEWEST_L3 and count < len(retained)
+        if shrinking:
             # A shrink can drop entire groups using only CPUs already owned.
             candidates = retained
             retained = set()
@@ -411,7 +418,32 @@ class AllocationsDB:
         current = [group for group in groups if group & retained]
         if mode == CpuPlacement.SINGLE_L3:
             return self._select_single_l3(groups, current, retained, own, count)
-        return self._select_fewest_l3(groups, current, retained, own, count)
+        selected = self._select_fewest_l3(groups, current, retained, own, count)
+        if shrinking and count >= 2:
+            return self._prefer_shrink_pairs(groups, selected, count)
+        return selected
+
+    def _prefer_shrink_pairs(
+        self, groups: list[set[int]], selected: set[int], count: int
+    ) -> set[int]:
+        """Preserve more owned SMT pairs when the same number of caches suffices."""
+        siblings = [
+            set(threads)
+            for threads in self._group_candidates_by_siblings(set().union(*groups))
+            if len(threads) >= 2
+        ]
+        selected_pairs = sum(len(threads & selected) >= 2 for threads in siblings)
+        if selected_pairs == min(count // 2, len(siblings)):
+            return selected
+
+        pair_counts = [sum(len(threads & group) >= 2 for threads in siblings) for group in groups]
+        group_count = sum(bool(group & selected) for group in groups)
+        best_pairs, indices = pack_shrink_groups(groups, pair_counts, group_count, count)
+        if best_pairs > selected_pairs:
+            return self._select_numa_cpus_smt_aware(
+                set().union(*(groups[i] for i in indices)), count
+            )
+        return selected
 
     def _select_single_l3(
         self,

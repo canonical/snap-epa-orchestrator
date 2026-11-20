@@ -37,7 +37,7 @@ def _request(socket_path, action, **params):
                 }
             ).encode()
         )
-        response = json.loads(client.recv(65536))
+        response = json.loads(b"".join(iter(lambda: client.recv(4096), b"")))
     if "error" not in response:
         assert response.get("pool") == params.get("pool", "isolated"), response
     return response
@@ -101,6 +101,8 @@ def test_configured_pool_success(socket_path, configured_pool, action, params, f
 def test_strict_snap_l3_placement(socket_path, configured_pool):
     """Read real kernel cache topology and place CPUs through the confined daemon."""
     online = _ids(Path("/sys/devices/system/cpu/online").read_text().strip())
+    listing = _request(socket_path, "list_allocations", pool="general", include_l3_topology=True)
+    assert "error" not in listing, listing
     kernel_groups = set()
     for cpu in configured_pool:
         cache = Path(f"/sys/devices/system/cpu/cpu{cpu}/cache")
@@ -114,13 +116,22 @@ def test_strict_snap_l3_placement(socket_path, configured_pool):
             None,
         )
         if entry is None:
-            pytest.skip(f"Guest CPU {cpu} exposes no unified L3 cache")
+            assert "l3-placement" not in listing["supported_cpu_features"], listing
+            assert listing["l3_topology"] is None
+            response = _request(
+                socket_path,
+                "allocate_cores",
+                pool="general",
+                num_of_cores=2,
+                placement="single_l3",
+            )
+            assert response.get("code") == "l3_topology_unavailable", response
+            return
         kernel_groups.add(frozenset(_ids((entry / "shared_cpu_list").read_text().strip())))
     expected = {
         frozenset(group & configured_pool): bool((group & online) - configured_pool)
         for group in kernel_groups
     }
-    listing = _request(socket_path, "list_allocations", pool="general")
     assert "l3-placement" in listing["supported_cpu_features"], listing
     observed = {
         frozenset(_ids(group["cpus"])): group["partial"] for group in listing["l3_topology"]
@@ -131,10 +142,15 @@ def test_strict_snap_l3_placement(socket_path, configured_pool):
         socket_path,
         "allocate_cores",
         pool="general",
-        num_of_cores=1,
+        num_of_cores=2,
         placement="single_l3",
         preemption_policy="non-preemptive",
     )
+    if max(map(len, expected)) < 2:
+        assert response.get("code") == "l3_no_group_fits", response
+        return
     assert response.get("placement") == "single_l3", response
     assert response["l3_groups"] == [response["allocated_cores"]]
-    assert _ids(response["allocated_cores"]) <= configured_pool
+    selected = _ids(response["allocated_cores"])
+    assert len(selected) == 2
+    assert any(selected <= group for group in expected)
