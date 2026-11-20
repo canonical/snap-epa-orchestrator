@@ -118,6 +118,12 @@ jobs:
         run: |
           sudo snap list | grep epa-orchestrator
           sudo snap services epa-orchestrator
+      - name: Configure the general CPU pool
+        run: |
+          cpu_pool=$(cat /sys/devices/system/node/node0/cpulist)
+          sudo snap set epa-orchestrator "cpu-pool=$cpu_pool"
+          sudo snap restart epa-orchestrator.daemon
+          echo "EPA_TEST_CPU_POOL=$cpu_pool" >> "$GITHUB_ENV"
 
       - name: Set up Python
         uses: actions/setup-python@v5

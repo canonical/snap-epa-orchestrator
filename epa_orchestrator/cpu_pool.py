@@ -20,9 +20,11 @@ from pathlib import Path
 from typing import AbstractSet, Literal, Optional
 
 from . import cpu_pinning
+from .l3_topology import L3Topology, PlacementError
 from .schemas import CpuPoolName
 from .utils import to_ranges
 
+CPU_SYSFS = Path("/sys/devices/system/cpu")
 ONLINE_CPUS_PATH = "/sys/devices/system/cpu/online"
 VALIDATED_POOL_OPTION = "internal.validated-cpu-pool"
 # Bound range expansion when membership in the present topology is not enforced.
@@ -65,6 +67,40 @@ def read_cpu_list(path: str) -> frozenset[int]:
     return parse_cpu_list(value, allow_empty=True)
 
 
+def _read_l3_group(cpu: int) -> frozenset[int]:
+    """Find the unified L3 cache by attributes rather than by index number."""
+    cache = CPU_SYSFS / f"cpu{cpu}" / "cache"
+    for entry in sorted(cache.iterdir()):
+        if not re.fullmatch(r"index[0-9]+", entry.name):
+            continue
+        if (entry / "level").read_text().strip() != "3":
+            continue
+        if (entry / "type").read_text().strip() == "Unified":
+            return parse_cpu_list((entry / "shared_cpu_list").read_text())
+    raise ValueError("no unified L3 cache found")
+
+
+def _read_l3_topology(eligible: frozenset[int], online: frozenset[int]) -> L3Topology:
+    """Read every eligible CPU and require consistent sharing lists."""
+    by_cpu: dict[int, frozenset[int]] = {}
+    groups: set[frozenset[int]] = set()
+    for cpu in sorted(eligible):
+        try:
+            group = _read_l3_group(cpu)
+            if cpu not in group:
+                raise ValueError("sharing list excludes the CPU itself")
+            if group not in groups:
+                if not by_cpu.keys().isdisjoint(group):
+                    raise ValueError("L3 sharing lists overlap")
+                by_cpu.update(dict.fromkeys(group, group))
+                groups.add(group)
+        except (OSError, ValueError) as exc:
+            raise PlacementError(
+                "l3_topology_unavailable", f"Cannot read L3 topology for CPU {cpu}: {exc}"
+            ) from exc
+    return L3Topology(tuple(sorted(groups, key=min)), online)
+
+
 def read_snap_cpu_pool() -> Optional[str]:
     """Read the committed (or hook transaction's proposed) snap option once.
 
@@ -103,10 +139,13 @@ class CpuPoolSnapshot:
     source: Literal["isolated", "configured"]
     configured_cpus: frozenset[int]
     eligible_cpus: frozenset[int]
+    online_cpus: frozenset[int] | None = None
 
 
 class CpuPoolProvider:
     """Freeze a pool choice, using only sysfs (not snapd) by default."""
+
+    _l3_topology: L3Topology | None = None
 
     def __init__(self, configuration: Optional[str] = None) -> None:
         """Freeze the configured IDs, retaining offline and absent CPUs."""
@@ -138,12 +177,47 @@ class CpuPoolProvider:
             if not allow_unavailable:
                 raise
             logging.warning("CPU capacity unavailable; reporting zero eligible CPUs: %s", exc)
-            online = frozenset()
+            online = None
+        topology = self._l3_topology
+        if topology is not None and topology.online != online:
+            self._l3_topology = None
         return CpuPoolSnapshot(
             self.source,
             self.configured_cpus,
-            self.configured_cpus & online,
+            self.configured_cpus & (online or frozenset()),
+            online,
         )
+
+    def get_l3_topology(self, snapshot: CpuPoolSnapshot) -> L3Topology:
+        """Cache successful reads until the full online mask changes."""
+        topology = self._l3_topology
+        if snapshot.online_cpus is None:
+            self._l3_topology = None
+            raise PlacementError("l3_topology_unavailable", "Online CPU topology is unavailable")
+        if topology is None or topology.online != snapshot.online_cpus:
+            self._l3_topology = None
+            topology = _read_l3_topology(snapshot.eligible_cpus, snapshot.online_cpus)
+            self._l3_topology = topology
+        return topology
+
+    def warn_partial_l3_groups(self, pool: CpuPoolName) -> None:
+        """Warn about shared cache groups when loading an otherwise valid pool."""
+        if not self.configured_cpus:
+            return
+        try:
+            snapshot = self.snapshot()
+            topology = self.get_l3_topology(snapshot)
+        except ValueError:
+            return
+        partial = [
+            group.cpus
+            for group in topology.pool_groups(self.configured_cpus, set())
+            if group.partial
+        ]
+        if partial:
+            logging.warning(
+                "CPU pool %s cuts through L3 groups: %s", pool.value, "; ".join(partial)
+            )
 
     def validate_claims(self, claimed: AbstractSet[int]) -> None:
         """Reject a configured pool which excludes owners, even if they are offline."""
@@ -255,6 +329,8 @@ def validate_snap_configuration() -> None:
         )
     except (OSError, subprocess.CalledProcessError) as exc:
         raise ValueError(f"Failed to record validated cpu-pool configuration: {exc}") from exc
+    if pools.general is not None:
+        pools.general.warn_partial_l3_groups(CpuPoolName.GENERAL)
 
 
 def main() -> None:
