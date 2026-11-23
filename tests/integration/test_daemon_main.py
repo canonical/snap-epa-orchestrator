@@ -33,7 +33,8 @@ def _request(socket_path, action, **params):
         client.settimeout(5)
         client.connect(socket_path)
         client.sendall(json.dumps(payload).encode())
-        return json.loads(client.recv(65536))
+        with client.makefile("rb") as response:
+            return json.load(response)
 
 
 def test_daemon_main_wires_startup_pool_into_requests(mock_cpu_files_empty, monkeypatch):

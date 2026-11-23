@@ -27,7 +27,8 @@ def socket_responder(monkeypatch):
             def send(data):
                 payload = json.loads(data)
                 requests.append(payload)
-                connection.recv.return_value = json.dumps(respond(payload)).encode()
+                response = json.dumps(respond(payload)).encode()
+                connection.recv.side_effect = (response[:10], response[10:], b"")
 
             connection.sendall.side_effect = send
             return connection

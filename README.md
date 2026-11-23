@@ -156,6 +156,64 @@ stop/release ordinary-CPU claims before upgrading, then recreate them explicitly
 in `general`. Do not downgrade to binaries without pool support while general
 claims exist: those binaries cannot enforce this ownership boundary.
 
+### L3-aware CPU placement
+
+Check for `l3-placement` in the selected pool's `supported_cpu_features`
+before sending `placement`, and verify that the response echoes the requested
+mode. Older daemons can silently ignore the field.
+
+```json
+{
+  "action": "allocate_cores",
+  "service_name": "ceph-osd.12",
+  "pool": "general",
+  "num_of_cores": 8,
+  "preemption_policy": "non-preemptive",
+  "placement": "single_l3"
+}
+```
+
+- `single_l3` requires the CPUs selected by the request to share one L3 cache.
+  It prefers groups that need the fewest CPUs from other claims, then the
+  smallest fitting group. It returns `l3_no_group_fits` when none fit, or
+  `l3_topology_unavailable` when cache topology cannot be read.
+- `fewest_l3` is the default for positive-count and NUMA grants. It uses the same placement when one group fits. For larger grants,
+  it minimizes the number of L3 groups, preferring fewer NUMA nodes where
+  topology permits. Within a requested NUMA node, it then minimizes the
+  number of CPUs reclaimed from other claims. If L3 topology cannot be read,
+  it uses ordinary selection.
+- Set `"placement": "legacy"` on a positive-count or NUMA request to use the
+  original selection policy. A NUMA request covers
+  the selected node only. Percentage requests must omit `placement` entirely,
+  including when its value would be `null`. A placement mode on a default-size
+  request returns `placement_not_supported`. Count and NUMA releases ignore placement.
+- On a non-preemptive resize, retained CPUs stay in place. A `fewest_l3` shrink
+  uses the fewest caches and prefers keeping more SMT pairs among placements
+  that use that many caches. Strict placement returns `l3_growth_would_spill` if an
+  existing group cannot accommodate growth and `l3_claim_spans_groups` if the
+  current claim already spans groups. These errors leave claims intact.
+  Placement applies per request. Send `single_l3` again for a strict resize.
+
+Allocation responses include `l3_groups`, an array of CPU range strings, one
+per shared L3 cache involved in the claim. A `null` value
+means the daemon could not determine group membership. On an echoed
+`fewest_l3` grant, this also indicates ordinary fallback selection.
+
+Set `"include_l3_topology": true` on a `list_allocations` request to include
+`l3_groups` on each claim and `l3_topology` for the pool. Both fields can be
+`null` when the relevant topology is unavailable. Each pool entry has
+`cpus` (eligible IDs), `free` (eligible IDs with no claim), and `partial`
+(the group contains online CPUs outside the configured pool). For example:
+
+```json
+{"cpus": "32-39,288-295", "free": "36-39,292-295", "partial": false}
+```
+
+A `single_l3` claim can share its cache with other workloads. A
+non-preemptive claim that takes a complete, non-partial group keeps that
+group free of other EPA claims. Host tasks and interrupts still depend
+on the host's affinity and isolation configuration.
+
 ### Topology changes and recovery
 
 The configure hook checks new general-pool settings against present topology and
@@ -216,7 +274,8 @@ The daemon listens on:
 $SNAP_DATA/data/epa.sock
 ```
 
-Clients can connect to this socket and send JSON requests. The supported actions are:
+Open one connection per JSON request and read the response until the daemon
+closes the connection. The supported actions are:
 
 #### 1. Allocate Cores (`allocate_cores`)
 
